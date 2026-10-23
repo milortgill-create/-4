@@ -472,7 +472,7 @@ function addCrate(name, position, size, mass, hue, yaw = 0) {
   const visual = createCrateVisual(w, h, d, hue, name);
   const body = addPhysicsProp({
     kind: 'prop', type: 'ЯЩИК', name, mass,
-    detail: `${mass.toFixed(1)} КГ · ДЕРЕВО`, range: 4.5,
+    detail: `${mass.toFixed(1)} КГ · ДЕРЕВО`, description: 'Усиленный деревянный испытательный ящик с металлическими накладками.', range: 4.5,
     inventoryWidth: w > 0.88 ? 3 : 2, inventoryHeight: h > 0.88 ? 3 : 2, inventoryIcon: '▣'
   }, new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)), mass, position, visual, yaw);
   return body;
@@ -482,7 +482,7 @@ function addBarrel(name, position, radius, height, mass, matIndex, yaw = 0) {
   const shape = new CANNON.Cylinder(radius * 0.9, radius, height, 12);
   return addPhysicsProp({
     kind: 'prop', type: 'БОЧКА', name, mass,
-    detail: `${mass.toFixed(0)} КГ · ТЯЖЁЛАЯ СТАЛЬ`, range: 4.4,
+    detail: `${mass.toFixed(0)} КГ · ТЯЖЁЛАЯ СТАЛЬ`, description: 'Тяжёлая металлическая тара; занимает крупный объём и резко нагружает переносимый вес.', range: 4.4,
     inventoryWidth: 2, inventoryHeight: 3, inventoryIcon: '◉'
   }, shape, mass, position, visual, yaw, { angularDamping: 0.23 });
 }
@@ -494,7 +494,7 @@ function addBottle(name, position, matIndex, yaw = 0) {
   ];
   return addPhysicsProp({
     kind: 'prop', type: 'БУТЫЛКА', name, mass: 0.38,
-    detail: '0.38 КГ · ЛЁГКОЕ СТЕКЛО', range: 3.8,
+    detail: '0.38 КГ · ЛЁГКОЕ СТЕКЛО', description: 'Небольшой стеклянный лабораторный флакон. Почти не влияет на общий вес.', range: 3.8,
     inventoryWidth: 1, inventoryHeight: 1, inventoryIcon: '◉'
   }, shape, 0.38, position, visual, yaw, { linearDamping: 0.035, angularDamping: 0.12 });
 }
@@ -502,7 +502,7 @@ function addPlank(name, position, length, width, thickness, mass, yaw = 0) {
   const visual = createPlankVisual(length, width, thickness, (Math.abs(yaw) > 0.1) ? 1 : 0);
   return addPhysicsProp({
     kind: 'prop', type: 'ДОСКА', name, mass,
-    detail: `${mass.toFixed(1)} КГ · СОСНА`, range: 4.3,
+    detail: `${mass.toFixed(1)} КГ · СОСНА`, description: 'Длинная деревянная доска; в рюкзаке укладывается вертикально.', range: 4.3,
     inventoryWidth: 1, inventoryHeight: 4, inventoryIcon: '▬'
   }, new CANNON.Box(new CANNON.Vec3(length / 2, thickness / 2, width / 2)), mass, position, visual, yaw, { angularDamping: 0.21 });
 }
@@ -510,8 +510,8 @@ function addShovel(name, position, yaw = 0) {
   const visual = createShovelVisual();
   return addPhysicsProp({
     kind: 'prop', type: 'ЛОПАТА', name, mass: 3.6,
-    detail: '3.6 КГ · СТАЛЬ / ДЕРЕВО', range: 4.5,
-    inventoryWidth: 2, inventoryHeight: 4, inventoryIcon: '⚒'
+    detail: '3.6 КГ · СТАЛЬ / ДЕРЕВО', description: 'Полевой инструмент со стальным штыком и деревянной рукоятью. Размер 2 × 3 ячейки.', range: 4.5,
+    inventoryWidth: 2, inventoryHeight: 3, inventoryIcon: '⚒'
   }, new CANNON.Box(new CANNON.Vec3(0.64, 0.07, 0.2)), 3.6, position, visual, yaw, { angularDamping: 0.3 });
 }
 
@@ -708,81 +708,73 @@ playerBody.addEventListener('collide', (event) => {
 
 const handGroup = new THREE.Group();
 camera.add(handGroup);
-const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x536764, roughness: 0.82, metalness: 0.05 });
-const cuffMat = new THREE.MeshStandardMaterial({ color: 0x283a3a, roughness: 0.74, metalness: 0.1 });
-const gloveMat = new THREE.MeshStandardMaterial({ color: 0x46544b, roughness: 0.88, metalness: 0.03 });
-const gloveEdge = new THREE.MeshStandardMaterial({ color: 0x29352f, roughness: 0.82, metalness: 0.05 });
-const glovePad = new THREE.MeshStandardMaterial({ color: 0x657168, roughness: 0.84, metalness: 0.02 });
+const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x59645a, roughness: 0.86, metalness: 0.02 });
+const cuffMat = new THREE.MeshStandardMaterial({ color: 0x252e29, roughness: 0.78, metalness: 0.08 });
+const gloveMat = new THREE.MeshStandardMaterial({ color: 0x39443a, roughness: 0.91, metalness: 0.01 });
+const gloveEdge = new THREE.MeshStandardMaterial({ color: 0x202921, roughness: 0.84, metalness: 0.03 });
+const glovePad = new THREE.MeshStandardMaterial({ color: 0x56624e, roughness: 0.88, metalness: 0.02 });
 const fingerRigs = [];
 let handPose = 0;
 let handTargetPose = 0;
 function setHandPose(value) { handTargetPose = value; }
+function block(geometry, material, position, rotationZ = 0) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.rotation.z = rotationZ;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
 function buildHand(side) {
   const group = new THREE.Group();
   const mirrored = side < 0 ? -1 : 1;
-  const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.078, 0.42, 4, 10), sleeveMat);
-  forearm.rotation.z = mirrored * 0.4;
-  forearm.position.set(-mirrored * 0.045, -0.06, 0);
+  const forearm = block(new THREE.BoxGeometry(0.145, 0.33, 0.17), sleeveMat, [-mirrored * 0.045, -0.065, 0], mirrored * 0.37);
   group.add(forearm);
-  const sleeveBand = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.012, 6, 14), gloveEdge);
-  sleeveBand.position.set(mirrored * 0.055, 0.16, 0);
-  sleeveBand.rotation.x = Math.PI / 2;
-  sleeveBand.rotation.z = mirrored * 0.4;
-  group.add(sleeveBand);
-  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.078, 0.075, 12), cuffMat);
-  cuff.position.set(mirrored * 0.095, 0.2, 0);
-  cuff.rotation.z = mirrored * 0.4;
+  const forearmSeam = block(new THREE.BoxGeometry(0.152, 0.018, 0.176), gloveEdge, [-mirrored * 0.018, 0.058, -0.002], mirrored * 0.37);
+  group.add(forearmSeam);
+  const cuff = block(new THREE.BoxGeometry(0.18, 0.075, 0.19), cuffMat, [mirrored * 0.082, 0.19, -0.006], mirrored * 0.37);
   group.add(cuff);
+  group.add(block(new THREE.BoxGeometry(0.145, 0.018, 0.194), glovePad, [mirrored * 0.082, 0.166, -0.006], mirrored * 0.37));
 
   const palm = new THREE.Group();
-  palm.position.set(mirrored * 0.15, 0.285, -0.01);
-  palm.rotation.z = -mirrored * 0.08;
+  palm.position.set(mirrored * 0.15, 0.285, -0.025);
+  palm.rotation.z = -mirrored * 0.06;
   group.add(palm);
-  const palmShape = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), gloveMat);
-  palmShape.scale.set(0.077, 0.105, 0.048);
-  palm.add(palmShape);
-  const backPlate = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), glovePad);
-  backPlate.scale.set(0.055, 0.052, 0.014);
-  backPlate.position.set(0, 0.018, 0.043);
-  palm.add(backPlate);
-  const wristInset = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.025, 0.012), gloveEdge);
-  wristInset.position.set(0, -0.069, 0.038);
-  palm.add(wristInset);
+  palm.add(block(new THREE.BoxGeometry(0.225, 0.165, 0.112), gloveMat, [0, 0, 0]));
+  palm.add(block(new THREE.BoxGeometry(0.135, 0.074, 0.012), glovePad, [0, 0.005, -0.062]));
+  palm.add(block(new THREE.BoxGeometry(0.084, 0.018, 0.018), gloveEdge, [0, -0.071, -0.052]));
+  palm.add(block(new THREE.BoxGeometry(0.196, 0.025, 0.018), gloveEdge, [0, 0.067, -0.057]));
 
+  const fingerLengths = [0.081, 0.094, 0.087, 0.071];
   for (let i = 0; i < 4; i++) {
     const finger = new THREE.Group();
-    finger.position.set((i - 1.5) * 0.034, 0.078 + (i === 0 || i === 3 ? -0.009 : 0), 0.002);
+    const proximalLength = fingerLengths[i] * 0.59;
+    const distalLength = fingerLengths[i] * 0.41;
+    finger.position.set((i - 1.5) * 0.052, 0.078, -0.018);
     palm.add(finger);
-    const length = i === 1 || i === 2 ? 0.055 : 0.047;
-    const proximal = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, length, 3, 8), gloveMat);
-    proximal.position.y = length * 0.48;
-    finger.add(proximal);
-    const knuckle = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), glovePad);
-    knuckle.position.y = length * 0.91;
-    finger.add(knuckle);
+    finger.add(block(new THREE.BoxGeometry(0.041, proximalLength, 0.076), gloveMat, [0, proximalLength * 0.5, 0]));
+    finger.add(block(new THREE.BoxGeometry(0.044, 0.022, 0.078), glovePad, [0, proximalLength - 0.008, -0.004]));
     const distal = new THREE.Group();
-    distal.position.y = length * 0.9;
+    distal.position.y = proximalLength - 0.004;
     finger.add(distal);
-    const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, length * 0.58, 3, 8), gloveMat);
-    tip.position.y = length * 0.27;
-    distal.add(tip);
-    fingerRigs.push({ base: finger, distal, fan: (i - 1.5) * 0.045, side: mirrored });
+    distal.add(block(new THREE.BoxGeometry(0.037, distalLength, 0.071), gloveMat, [0, distalLength * 0.48, 0]));
+    distal.add(block(new THREE.BoxGeometry(0.038, 0.015, 0.073), glovePad, [0, distalLength - 0.007, -0.002]));
+    fingerRigs.push({ base: finger, distal, fan: (i - 1.5) * 0.055, side: mirrored });
   }
+
   const thumb = new THREE.Group();
-  thumb.position.set(mirrored * 0.066, -0.004, 0.008);
-  thumb.rotation.z = -mirrored * 0.63;
+  thumb.position.set(mirrored * 0.104, -0.008, -0.025);
+  thumb.rotation.z = mirrored * 0.54;
   palm.add(thumb);
-  const thumbBase = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.045, 3, 8), gloveMat);
-  thumbBase.position.y = 0.03;
-  thumb.add(thumbBase);
-  const thumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.034, 3, 8), glovePad);
-  thumbTip.position.set(mirrored * 0.012, 0.072, 0.003);
+  thumb.add(block(new THREE.BoxGeometry(0.057, 0.085, 0.078), gloveMat, [0, 0.041, 0]));
+  const thumbTip = new THREE.Group();
+  thumbTip.position.y = 0.075;
   thumb.add(thumbTip);
-  fingerRigs.push({ base: thumb, distal: null, fan: 0.5, side: mirrored, thumb: true });
+  thumbTip.add(block(new THREE.BoxGeometry(0.052, 0.067, 0.072), glovePad, [0, 0.031, -0.002]));
+  fingerRigs.push({ base: thumb, distal: thumbTip, fan: 0.54, side: mirrored, thumb: true });
 
   group.position.set(side * 0.39, -0.64, -0.77);
   group.rotation.z = -side * 0.05;
-  group.traverse((object) => { if (object.isMesh) { object.castShadow = false; object.receiveShadow = false; } });
   handGroup.add(group);
 }
 buildHand(-1);
@@ -791,15 +783,76 @@ function updateHandPose(dt) {
   handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
   for (const rig of fingerRigs) {
     if (rig.thumb) {
-      rig.base.rotation.x = handPose * 0.48;
-      rig.base.rotation.z = -rig.side * (0.63 + handPose * 0.32);
+      rig.base.rotation.x = -handPose * 0.6;
+      rig.base.rotation.z = rig.side * (0.54 + handPose * 0.62);
+      rig.distal.rotation.x = -handPose * 0.9;
     } else {
-      rig.base.rotation.x = handPose * 0.92;
-      rig.base.rotation.z = rig.fan * (0.25 + handPose * 0.45);
-      rig.distal.rotation.x = handPose * 0.85;
+      rig.base.rotation.x = -handPose * 0.58;
+      rig.base.rotation.z = rig.fan * (0.25 + handPose * 0.25);
+      rig.distal.rotation.x = -handPose * 1.28;
     }
   }
 }
+
+// Separate low-poly operator preview for the inventory screen. The model is original and uses block-based geometry.
+const inventoryScene = new THREE.Scene();
+inventoryScene.background = null;
+const inventoryCamera = new THREE.PerspectiveCamera(31, 1, 0.1, 20);
+inventoryCamera.position.set(2.35, 2.05, 3.9);
+inventoryCamera.lookAt(0, 0.98, 0);
+const inventoryActor = new THREE.Group();
+inventoryScene.add(inventoryActor);
+const previewJacket = new THREE.MeshStandardMaterial({ color: 0x596652, roughness: 0.88 });
+const previewPants = new THREE.MeshStandardMaterial({ color: 0x343c35, roughness: 0.92 });
+const previewBoots = new THREE.MeshStandardMaterial({ color: 0x252a25, roughness: 0.85 });
+const previewArmor = new THREE.MeshStandardMaterial({ color: 0x39453d, roughness: 0.76, metalness: 0.08 });
+const previewWebbing = new THREE.MeshStandardMaterial({ color: 0xa38c61, roughness: 0.92 });
+const previewHelmet = new THREE.MeshStandardMaterial({ color: 0x667253, roughness: 0.78 });
+const previewMask = new THREE.MeshStandardMaterial({ color: 0x202b2a, roughness: 0.56, metalness: 0.18 });
+const previewSkin = new THREE.MeshStandardMaterial({ color: 0x9b8b72, roughness: 0.88 });
+const previewAccent = new THREE.MeshStandardMaterial({ color: 0xb5824d, roughness: 0.68, metalness: 0.12 });
+function previewBox(parent, size, position, material, rotation = [0, 0, 0]) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+  parent.add(mesh);
+  return mesh;
+}
+const previewGround = new THREE.Mesh(new THREE.CylinderGeometry(0.67, 0.72, 0.055, 28), new THREE.MeshStandardMaterial({ color: 0x27312c, roughness: 0.96, metalness: 0.04 }));
+previewGround.position.y = 0.015;
+inventoryScene.add(previewGround);
+previewBox(inventoryActor, [0.44, 0.24, 0.27], [0, 0.58, 0], previewArmor);
+previewBox(inventoryActor, [0.5, 0.69, 0.3], [0, 1.02, 0], previewJacket);
+previewBox(inventoryActor, [0.37, 0.56, 0.2], [0, 1.0, -0.22], previewArmor);
+previewBox(inventoryActor, [0.07, 0.52, 0.035], [-0.13, 1.03, 0.17], previewWebbing, [0, 0, -0.1]);
+previewBox(inventoryActor, [0.07, 0.52, 0.035], [0.13, 1.03, 0.17], previewWebbing, [0, 0, 0.1]);
+previewBox(inventoryActor, [0.46, 0.07, 0.32], [0, 0.69, 0], previewWebbing);
+previewBox(inventoryActor, [0.13, 0.16, 0.06], [0, 0.94, 0.185], previewAccent);
+previewBox(inventoryActor, [0.12, 0.13, 0.035], [0, 1.05, 0.19], previewWebbing);
+previewBox(inventoryActor, [0.15, 0.14, 0.15], [0, 1.45, 0], previewSkin);
+previewBox(inventoryActor, [0.32, 0.33, 0.28], [0, 1.67, 0], previewSkin);
+previewBox(inventoryActor, [0.38, 0.2, 0.35], [0, 1.83, -0.005], previewHelmet);
+previewBox(inventoryActor, [0.4, 0.045, 0.38], [0, 1.77, 0.005], previewArmor);
+previewBox(inventoryActor, [0.22, 0.105, 0.08], [0, 1.59, 0.17], previewMask);
+previewBox(inventoryActor, [0.075, 0.105, 0.085], [-0.145, 1.59, 0.16], previewMask);
+previewBox(inventoryActor, [0.075, 0.105, 0.085], [0.145, 1.59, 0.16], previewMask);
+for (const side of [-1, 1]) {
+  previewBox(inventoryActor, [0.18, 0.46, 0.2], [side * 0.35, 1.05, 0], previewJacket, [0, 0, side * -0.06]);
+  previewBox(inventoryActor, [0.15, 0.37, 0.17], [side * 0.39, 0.67, 0.025], previewArmor, [0, 0, side * 0.025]);
+  previewBox(inventoryActor, [0.15, 0.11, 0.15], [side * 0.39, 0.42, 0.035], gloveMat);
+  previewBox(inventoryActor, [0.19, 0.43, 0.22], [side * 0.125, 0.36, 0], previewPants);
+  previewBox(inventoryActor, [0.16, 0.34, 0.18], [side * 0.13, 0.17, 0.015], previewPants);
+  previewBox(inventoryActor, [0.2, 0.13, 0.3], [side * 0.13, 0.065, 0.07], previewBoots);
+  previewBox(inventoryActor, [0.23, 0.035, 0.31], [side * 0.13, 0.015, 0.075], previewArmor);
+}
+inventoryScene.add(new THREE.HemisphereLight(0xd3dfcf, 0x3b4037, 1.6));
+const previewKey = new THREE.DirectionalLight(0xffe2b7, 2.2);
+previewKey.position.set(-2.5, 4.5, 3.5);
+inventoryScene.add(previewKey);
+let inventoryRenderer = null;
+let inventoryRendererFailed = false;
+let inventoryPreviewTime = 0;
+let inventoryPreviewAccumulator = 0;
 
 let yaw = 0;
 let pitch = 0;
@@ -813,14 +866,23 @@ let shakeAmount = 0;
 let damageCooldown = 0;
 let health = 100;
 let hunger = 100;
-let hungerDamageTimer = 0;
+let thirst = 100;
+let needsDamageTimer = 0;
+let bleedDamageTimer = 0;
+let needsHudTimer = 0;
+let dead = false;
+let deathTimer = 0;
+let pendingDeathRelease = false;
+let selectedBodyPart = null;
 let inventoryOpen = false;
 let inventoryItems = [];
+let selectedInventoryId = null;
 let inventorySequence = 0;
 const INVENTORY_COLUMNS = 8;
 const INVENTORY_ROWS = 5;
 const INVENTORY_WEIGHT_LIMIT = 30;
 let injuryLevels = { head: 0, neck: 0, torso: 0, 'arm-left': 0, 'arm-right': 0, 'leg-left': 0, 'leg-right': 0 };
+const bleedingParts = new Set();
 let toastTimer = 0;
 let targetRefresh = 0;
 let elapsed = 0;
@@ -854,10 +916,31 @@ function updateHealthHUD() {
   $('health-bar').style.background = health < 35 ? '#d95c50' : health < 70 ? '#c3a66d' : '#9ab779';
 }
 
-function updateHungerHUD() {
+function updateNeedsHUD() {
   $('hunger-value').textContent = String(Math.round(hunger));
   $('hunger-bar').style.width = `${hunger}%`;
   $('hunger-bar').style.background = hunger < 25 ? '#dc7950' : '#c4a66e';
+  $('thirst-value').textContent = String(Math.round(thirst));
+  $('thirst-bar').style.width = `${thirst}%`;
+  $('thirst-bar').style.background = thirst < 25 ? '#5fa6c5' : '#78aeb6';
+}
+
+function labelBodyPart(part) {
+  const labels = {
+    head: 'ГОЛОВА', neck: 'ШЕЯ', torso: 'КОРПУС',
+    'arm-left': 'ЛЕВАЯ РУКА', 'arm-right': 'ПРАВАЯ РУКА',
+    'leg-left': 'ЛЕВАЯ НОГА', 'leg-right': 'ПРАВАЯ НОГА'
+  };
+  return labels[part] || 'КОРПУС';
+}
+
+function updateInjuryStatus(part) {
+  const severity = injuryLevels[part] || 0;
+  const isBleeding = bleedingParts.has(part);
+  $('injury-status').textContent = isBleeding
+    ? `КРОВОТЕЧЕНИЕ · ${labelBodyPart(part)}`
+    : severity > 0 ? `ТРАВМА · ${labelBodyPart(part)}` : `БЕЗ ТРАВМ · ${labelBodyPart(part)}`;
+  $('injury-status').classList.toggle('alert', severity > 0 || isBleeding);
 }
 
 function classifyPlayerHit(contact) {
@@ -872,38 +955,100 @@ function classifyPlayerHit(contact) {
 }
 
 function applyBodyInjury(part, amount) {
-  const element = $(injuryElementIds[part] || 'injury-torso');
-  injuryLevels[part] = Math.min(1, (injuryLevels[part] || 0) + Math.max(0.28, amount / 24));
+  const id = injuryElementIds[part] ? part : 'torso';
+  const element = $(injuryElementIds[id]);
+  injuryLevels[id] = Math.min(1, (injuryLevels[id] || 0) + Math.max(0.28, amount / 24));
   element.classList.add('injured');
-  element.style.opacity = String(0.55 + injuryLevels[part] * 0.45);
-  const label = part === 'head' ? 'ГОЛОВА' : part === 'neck' ? 'ШЕЯ' : part === 'torso' ? 'КОРПУС' : part.startsWith('arm') ? (part.endsWith('left') ? 'ЛЕВАЯ РУКА' : 'ПРАВАЯ РУКА') : (part.endsWith('left') ? 'ЛЕВАЯ НОГА' : 'ПРАВАЯ НОГА');
-  $('injury-status').textContent = `ТРАВМА · ${label}`;
-  $('injury-status').classList.add('alert');
+  element.style.opacity = String(0.55 + injuryLevels[id] * 0.45);
+  if (injuryLevels[id] >= 0.55) {
+    bleedingParts.add(id);
+    $(`bleed-${id}`).classList.add('active');
+  }
+  selectedBodyPart = id;
+  for (const [key, injuryId] of Object.entries(injuryElementIds)) $(injuryId).classList.toggle('selected', key === id);
+  updateInjuryStatus(id);
+}
+
+function selectBodyPart(part) {
+  if (!injuryElementIds[part]) return;
+  selectedBodyPart = part;
+  for (const [key, id] of Object.entries(injuryElementIds)) $(id).classList.toggle('selected', key === part);
+  updateInjuryStatus(part);
+  const injury = injuryLevels[part] || 0;
+  const state = bleedingParts.has(part) ? ' · КРОВОТЕЧЕНИЕ' : injury > 0 ? ` · ТРАВМА ${Math.round(injury * 100)}%` : ' · ПОВРЕЖДЕНИЙ НЕТ';
+  toast(`${labelBodyPart(part)}${state}`, 1.2);
+}
+
+function triggerDeath(reason = 'КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ') {
+  if (dead) return;
+  if (inventoryOpen) setInventoryOpen(false);
+  pendingDeathRelease = Boolean(heldBody);
+  dead = true;
+  deathTimer = 0;
+  health = 0;
+  updateHealthHUD();
+  $('death-detail').textContent = reason;
+  $('death-overlay').classList.add('visible');
+  $('death-overlay').setAttribute('aria-hidden', 'false');
+  document.body.classList.add('dead');
+  keys.clear();
+  resetJoystick();
+  lookState = null;
+  playerBody.velocity.set(0, 0, 0);
+  setHandPose(0);
+  if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
 }
 
 function receiveDamage(amount, part = 'torso') {
-  if (damageCooldown > 0 || !started) return;
+  if (!started || dead) return;
+  const severity = Math.max(1, Math.round(amount));
+  const fatalNeckHit = part === 'neck' && severity >= 14;
+  if (damageCooldown > 0 && !fatalNeckHit) return;
   damageCooldown = 0.72;
-  health = Math.max(0, health - amount);
+  health = Math.max(0, health - severity);
   shakeAmount = Math.min(1.4, shakeAmount + 0.85);
   updateHealthHUD();
-  applyBodyInjury(part, amount);
+  applyBodyInjury(part, severity);
   document.body.classList.add('damage-flash');
   setTimeout(() => document.body.classList.remove('damage-flash'), 170);
-  toast(`УДАР · −${amount}%`, 0.9);
-  if (health === 0) toast('ОПЕРАТОР ВЫВЕДЕН · НАЖМИТЕ ↻', 2.5);
+  if (part === 'neck' && severity >= 14) {
+    triggerDeath('ШЕЙНАЯ ТРАВМА · КРИТИЧЕСКАЯ КРОВОПОТЕРЯ');
+    return;
+  }
+  if (health === 0) {
+    triggerDeath(`СМЕРТЕЛЬНОЕ РАНЕНИЕ · ${labelBodyPart(part)}`);
+    return;
+  }
+  toast(`УДАР · −${severity}%`, 0.9);
 }
 
 function updateNeeds(dt) {
-  if (!started || inventoryOpen) return;
-  hunger = Math.max(0, hunger - dt * 0.028);
-  updateHungerHUD();
-  if (hunger <= 0) {
-    hungerDamageTimer += dt;
-    if (hungerDamageTimer >= 6) {
-      hungerDamageTimer = 0;
-      receiveDamage(1, 'torso');
+  if (!started || inventoryOpen || dead) return;
+  hunger = Math.max(0, hunger - dt * 0.045);
+  thirst = Math.max(0, thirst - dt * 0.065);
+  needsHudTimer += dt;
+  if (needsHudTimer >= 0.35) {
+    needsHudTimer = 0;
+    updateNeedsHUD();
+  }
+  if (hunger <= 0 || thirst <= 0) {
+    needsDamageTimer += dt;
+    if (needsDamageTimer >= 6) {
+      needsDamageTimer = 0;
+      receiveDamage(hunger <= 0 && thirst <= 0 ? 2 : 1, 'torso');
     }
+  } else {
+    needsDamageTimer = 0;
+  }
+  if (bleedingParts.size) {
+    bleedDamageTimer += dt;
+    if (bleedDamageTimer >= 5) {
+      bleedDamageTimer = 0;
+      const bleedingPart = [...bleedingParts].sort((a, b) => injuryLevels[b] - injuryLevels[a])[0];
+      receiveDamage(1, bleedingPart);
+    }
+  } else {
+    bleedDamageTimer = 0;
   }
 }
 
@@ -975,13 +1120,23 @@ function getTargetMeta() {
 }
 
 function updateTargetUI() {
-  currentTarget = getTargetMeta();
   const reticle = $('reticle');
   const readout = $('target-readout');
   const action = $('action-button');
   const heldTag = $('held-tag');
   const placeButton = $('place-button');
   const stashButton = $('stash-button');
+  if (dead) {
+    currentTarget = null;
+    reticle.classList.remove('locked');
+    readout.classList.remove('visible');
+    heldTag.classList.remove('visible');
+    placeButton.classList.remove('visible');
+    stashButton.classList.remove('visible');
+    action.classList.remove('is-holding', 'has-target');
+    return;
+  }
+  currentTarget = getTargetMeta();
   if (heldBody) {
     const meta = heldBody.gameMeta;
     $('held-name').textContent = meta.name;
@@ -1113,6 +1268,23 @@ function dropHeld() {
   toast(`ПОЛОЖЕНО · ${meta.name}`, 0.95);
 }
 
+function releaseHeldAfterDeath() {
+  if (!heldBody) return;
+  const body = heldBody;
+  const meta = body.gameMeta;
+  meta.isHeld = false;
+  suspendPlayerCollision(meta);
+  body.linearDamping = meta.originalLinearDamping;
+  body.angularDamping = meta.originalAngularDamping;
+  body.force.set(0, 0, 0);
+  body.velocity.set(0, 0, 0);
+  body.angularVelocity.set(0, 0, 0);
+  body.wakeUp();
+  heldBody = null;
+  world.broadphase.dirty = true;
+  setHandPose(0);
+}
+
 function inventoryWeight() {
   return inventoryItems.reduce((total, item) => total + item.meta.mass, 0);
 }
@@ -1130,8 +1302,45 @@ function findInventorySlot(width, height) {
   return null;
 }
 
+function selectInventoryItem(id) {
+  const item = inventoryItems.find((entry) => entry.id === id);
+  if (!item) return;
+  selectedInventoryId = id;
+  $('inventory-selected-name').textContent = item.meta.name;
+  $('inventory-selected-weight').textContent = `${item.meta.mass.toFixed(1)} кг`;
+  $('inventory-selected-description').textContent = item.meta.description || item.meta.detail || 'Предмет без дополнительных сведений.';
+  const takeButton = $('inventory-take');
+  takeButton.disabled = Boolean(heldBody);
+  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : 'ДОСТАТЬ ПРЕДМЕТ';
+  $('inventory-message').textContent = `${item.meta.type} · ${item.width} × ${item.height} ЯЧЕЙКИ`;
+  for (const button of $('inventory-grid').querySelectorAll('.inventory-item')) {
+    button.classList.toggle('selected', button.dataset.itemId === id);
+    button.setAttribute('aria-pressed', String(button.dataset.itemId === id));
+  }
+}
+
+function updateInventorySelection() {
+  const item = inventoryItems.find((entry) => entry.id === selectedInventoryId);
+  const takeButton = $('inventory-take');
+  if (!item) {
+    selectedInventoryId = null;
+    $('inventory-selected-name').textContent = 'ПРЕДМЕТ НЕ ВЫБРАН';
+    $('inventory-selected-weight').textContent = '—';
+    $('inventory-selected-description').textContent = 'Нажмите на предмет в сетке, чтобы посмотреть его параметры.';
+    takeButton.disabled = true;
+    takeButton.textContent = 'ВЫБЕРИТЕ ПРЕДМЕТ';
+    return;
+  }
+  $('inventory-selected-name').textContent = item.meta.name;
+  $('inventory-selected-weight').textContent = `${item.meta.mass.toFixed(1)} кг`;
+  $('inventory-selected-description').textContent = item.meta.description || item.meta.detail || 'Предмет без дополнительных сведений.';
+  takeButton.disabled = Boolean(heldBody);
+  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : 'ДОСТАТЬ ПРЕДМЕТ';
+}
+
 function updateInventoryUI() {
   const grid = $('inventory-grid');
+  if (!inventoryItems.some((item) => item.id === selectedInventoryId)) selectedInventoryId = inventoryItems[0]?.id || null;
   grid.replaceChildren();
   for (let i = 0; i < INVENTORY_COLUMNS * INVENTORY_ROWS; i++) {
     const cell = document.createElement('div');
@@ -1142,10 +1351,12 @@ function updateInventoryUI() {
   for (const item of inventoryItems) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'inventory-item';
+    button.className = `inventory-item${item.id === selectedInventoryId ? ' selected' : ''}`;
+    button.dataset.itemId = item.id;
+    button.setAttribute('aria-pressed', String(item.id === selectedInventoryId));
     button.style.gridColumn = `${item.x + 1} / span ${item.width}`;
     button.style.gridRow = `${item.y + 1} / span ${item.height}`;
-    button.title = `${item.meta.name} · ${item.meta.mass.toFixed(1)} кг. Нажмите, чтобы взять.`;
+    button.title = `${item.meta.name} · ${item.meta.mass.toFixed(1)} кг · нажмите для описания`;
     const top = document.createElement('span');
     top.className = 'inventory-item-top';
     const icon = document.createElement('b');
@@ -1159,7 +1370,7 @@ function updateInventoryUI() {
     name.className = 'inventory-item-name';
     name.textContent = item.meta.name;
     button.append(top, name);
-    button.addEventListener('click', () => takeInventoryItem(item.id));
+    button.addEventListener('click', () => selectInventoryItem(item.id));
     grid.appendChild(button);
   }
   const total = inventoryWeight();
@@ -1168,13 +1379,49 @@ function updateInventoryUI() {
   $('inventory-weight-bar').style.width = `${Math.min(100, total / INVENTORY_WEIGHT_LIMIT * 100)}%`;
   $('inventory-weight-bar').style.background = total / INVENTORY_WEIGHT_LIMIT > 0.82 ? '#d08353' : '#a4c17e';
   $('inventory-empty').style.display = inventoryItems.length ? 'none' : 'flex';
-  $('inventory-message').innerHTML = inventoryItems.length
-    ? 'Коснитесь предмета,<br>чтобы взять его в руки.'
-    : 'Ячейки 8 × 5<br>Сложите предмет в рюкзак кнопкой «В РЮКЗАК».';
+  $('inventory-message').textContent = inventoryItems.length ? 'Выберите предмет, чтобы увидеть его размеры и свойства.' : 'Сложите предмет в рюкзак кнопкой «В РЮКЗАК».';
+  updateInventorySelection();
+}
+
+function resizeInventoryPreview() {
+  if (inventoryRendererFailed) return;
+  const frame = $('inventory-preview-frame');
+  const rect = frame.getBoundingClientRect();
+  if (rect.width < 8 || rect.height < 8) return;
+  if (!inventoryRenderer) {
+    try {
+      inventoryRenderer = new THREE.WebGLRenderer({ canvas: $('inventory-preview-canvas'), alpha: true, antialias: true, powerPreference: 'low-power' });
+      inventoryRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+      inventoryRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      inventoryRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+      inventoryRenderer.toneMappingExposure = 1.05;
+      inventoryRenderer.setClearColor(0x000000, 0);
+      $('inventory-preview-fallback').style.display = 'none';
+    } catch (_) {
+      inventoryRendererFailed = true;
+      $('inventory-preview-fallback').classList.add('visible');
+      return;
+    }
+  }
+  inventoryRenderer.setSize(rect.width, rect.height, false);
+  inventoryCamera.aspect = rect.width / rect.height;
+  inventoryCamera.updateProjectionMatrix();
+}
+
+function renderInventoryPreview(dt) {
+  if (!inventoryOpen || inventoryRendererFailed) return;
+  if (!inventoryRenderer) resizeInventoryPreview();
+  if (!inventoryRenderer) return;
+  inventoryPreviewTime += dt;
+  inventoryPreviewAccumulator += dt;
+  inventoryActor.rotation.y = Math.sin(inventoryPreviewTime * 0.42) * 0.46;
+  if (inventoryPreviewAccumulator < 1 / 30) return;
+  inventoryPreviewAccumulator = 0;
+  inventoryRenderer.render(inventoryScene, inventoryCamera);
 }
 
 function setInventoryOpen(open) {
-  if (open && !started) return;
+  if (open && (!started || dead)) return;
   inventoryOpen = open;
   const overlay = $('inventory-overlay');
   overlay.classList.toggle('open', open);
@@ -1183,6 +1430,7 @@ function setInventoryOpen(open) {
     resetJoystick();
     if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
     updateInventoryUI();
+    resizeInventoryPreview();
   } else {
     keys.clear();
   }
@@ -1220,11 +1468,13 @@ function storeHeldInInventory() {
   scene.remove(record.visual);
   heldBody = null;
   setHandPose(0);
-  inventoryItems.push({
+  const item = {
     id: `bag-${++inventorySequence}`,
     meta, body, visual: record.visual,
     x: slot.x, y: slot.y, width, height
-  });
+  };
+  inventoryItems.push(item);
+  selectedInventoryId = item.id;
   updateInventoryUI();
   updateTargetUI();
   toast(`В РЮКЗАКЕ · ${meta.name}`, 1.0);
@@ -1232,6 +1482,7 @@ function storeHeldInInventory() {
 }
 
 function takeInventoryItem(id) {
+  if (dead) return;
   if (heldBody) {
     toast('СНАЧАЛА ПОЛОЖИТЕ УДЕРЖИВАЕМЫЙ ПРЕДМЕТ', 1.0);
     return;
@@ -1259,6 +1510,7 @@ function takeInventoryItem(id) {
 }
 
 function doAction() {
+  if (dead) return;
   if (!started || inventoryOpen) { if (!started) startGame(); return; }
   if (heldBody) { throwHeld(); return; }
   const target = currentTarget || getTargetMeta();
@@ -1277,7 +1529,7 @@ function doAction() {
 }
 
 function updateHeld(dt) {
-  if (!heldBody) return;
+  if (!heldBody || dead) return;
   makeCameraDirection();
   const cameraPosition = camera.getWorldPosition(heldWorldTarget);
   heldWorldOffset.copy(lookVector).multiplyScalar(1.62);
@@ -1303,10 +1555,15 @@ function updateHeld(dt) {
 }
 
 function isMovementKeyDown() {
-  return !inventoryOpen && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12);
+  return !inventoryOpen && !dead && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12);
 }
 
 function updatePlayer(dt) {
+  if (dead) {
+    playerBody.velocity.x = 0;
+    playerBody.velocity.z = 0;
+    return;
+  }
   let strafe = inventoryOpen ? 0 : joystick.x;
   let forward = inventoryOpen ? 0 : -joystick.y;
   if (!inventoryOpen) {
@@ -1327,11 +1584,19 @@ function updatePlayer(dt) {
 }
 
 function updateCamera(dt) {
+  damageCooldown = Math.max(0, damageCooldown - dt);
+  shakeAmount = Math.max(0, shakeAmount - dt * 2.6);
+  if (dead) {
+    const fall = THREE.MathUtils.smoothstep(deathTimer, 0.05, 1.25);
+    camera.position.set(playerBody.position.x, playerBody.position.y + 0.77 - fall * 0.68, playerBody.position.z);
+    camera.rotation.set(pitch + fall * 0.08, yaw, -fall * 0.62, 'YXZ');
+    handGroup.visible = false;
+    return;
+  }
+  handGroup.visible = true;
   const moving = isMovementKeyDown();
   const bob = moving ? Math.sin(walkPhase * 2.0) * 0.026 : 0;
   const sway = moving ? Math.sin(walkPhase) * 0.012 : 0;
-  damageCooldown = Math.max(0, damageCooldown - dt);
-  shakeAmount = Math.max(0, shakeAmount - dt * 2.6);
   const shakeX = shakeAmount > 0 ? (Math.random() - 0.5) * 0.045 * shakeAmount : 0;
   const shakeY = shakeAmount > 0 ? (Math.random() - 0.5) * 0.036 * shakeAmount : 0;
   camera.position.set(playerBody.position.x + sway + shakeX, playerBody.position.y + 0.77 + bob + shakeY, playerBody.position.z);
@@ -1341,6 +1606,7 @@ function updateCamera(dt) {
 }
 
 function keepPlayerInBounds() {
+  if (dead) return;
   const safeX = 8.45;
   const safeZ = 6.45;
   if (![playerBody.position.x, playerBody.position.y, playerBody.position.z].every(Number.isFinite) || playerBody.position.y < 0.48) {
@@ -1405,6 +1671,7 @@ function animate(time) {
   const dt = Math.min(0.05, Math.max(0.001, (time - (animate.lastTime || time)) / 1000));
   animate.lastTime = time;
   elapsed += dt;
+  if (dead) deathTimer += dt;
   frameCount++;
   fpsTime += dt;
   if (fpsTime >= 1) {
@@ -1432,6 +1699,10 @@ function animate(time) {
     }
   }
   world.step(1 / 60, dt, 4);
+  if (pendingDeathRelease) {
+    releaseHeldAfterDeath();
+    pendingDeathRelease = false;
+  }
   keepPlayerInBounds();
   updatePlayerCollisionMasks();
   updateNeeds(dt);
@@ -1443,6 +1714,7 @@ function animate(time) {
     targetRefresh = 0;
   }
   renderer.render(scene, camera);
+  renderInventoryPreview(dt);
 }
 requestAnimationFrame(animate);
 
@@ -1452,6 +1724,7 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, qualityReduced ? 1 : (mobile ? 1.35 : 1.7)));
+  if (inventoryOpen) resizeInventoryPreview();
 }
 window.addEventListener('resize', resize, { passive: true });
 window.addEventListener('orientationchange', () => setTimeout(resize, 120), { passive: true });
@@ -1475,7 +1748,7 @@ function resetJoystick() {
   joystickKnob.style.transform = 'translate(0px, 0px)';
 }
 joystickRoot.addEventListener('pointerdown', (event) => {
-  if (!started) return;
+  if (!started || dead) return;
   event.preventDefault();
   joystick.pointerId = event.pointerId;
   joystickRoot.setPointerCapture(event.pointerId);
@@ -1488,7 +1761,7 @@ joystickRoot.addEventListener('pointerup', (event) => { if (event.pointerId === 
 joystickRoot.addEventListener('pointercancel', resetJoystick);
 
 function beginLook(event) {
-  if (!started || inventoryOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
+  if (!started || dead || inventoryOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
   if (event.target.closest('button, #joystick, #intro, .target-readout')) return;
   if (event.pointerType === 'mouse' && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
     try { canvas.requestPointerLock(); } catch (_) { /* Non-essential for browser testing. */ }
@@ -1498,7 +1771,7 @@ function beginLook(event) {
 window.addEventListener('pointerdown', beginLook, { passive: false });
 window.addEventListener('pointermove', (event) => {
   if (document.pointerLockElement === canvas) {
-    if (!started) return;
+    if (!started || dead) return;
     yaw -= (event.movementX || 0) * 0.0027;
     pitch = THREE.MathUtils.clamp(pitch - (event.movementY || 0) * 0.0027, -1.18, 1.18);
     return;
@@ -1519,10 +1792,31 @@ $('place-button').addEventListener('pointerdown', (event) => { event.preventDefa
 $('stash-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); storeHeldInInventory(); });
 $('inventory-button').addEventListener('click', () => setInventoryOpen(!inventoryOpen));
 $('inventory-close').addEventListener('click', () => setInventoryOpen(false));
+$('inventory-take').addEventListener('click', () => { if (selectedInventoryId) takeInventoryItem(selectedInventoryId); });
 $('inventory-overlay').addEventListener('click', (event) => { if (event.target === $('inventory-overlay')) setInventoryOpen(false); });
+$('death-restart').addEventListener('click', () => window.location.reload());
+$('injury-doll').addEventListener('pointerdown', (event) => {
+  const target = event.target.closest?.('.doll-part');
+  if (!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  selectBodyPart(target.id.replace('injury-', ''));
+});
+$('injury-doll').addEventListener('keydown', (event) => {
+  if (!['Enter', ' '].includes(event.key)) return;
+  const target = event.target.closest?.('.doll-part');
+  if (!target) return;
+  event.preventDefault();
+  selectBodyPart(target.id.replace('injury-', ''));
+});
 $('start-button').addEventListener('click', startGame);
 $('reset-button').addEventListener('click', () => window.location.reload());
 document.addEventListener('keydown', (event) => {
+  if (dead) {
+    if (event.code === 'KeyR') { event.preventDefault(); window.location.reload(); return; }
+    if (!event.target.closest?.('button')) event.preventDefault();
+    return;
+  }
   if (event.code === 'Tab') {
     event.preventDefault();
     if (started) setInventoryOpen(!inventoryOpen);
@@ -1543,6 +1837,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) { key
 
 updateRagdollCount();
 updateHealthHUD();
-updateHungerHUD();
+updateNeedsHUD();
 updateInventoryUI();
 updateTargetUI();

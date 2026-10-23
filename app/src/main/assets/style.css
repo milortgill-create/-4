@@ -244,3 +244,106 @@ body { position: fixed; inset: 0; }
   .inventory-footer { padding-top: 6px; }
 }
 body.damage-flash .vignette { background: radial-gradient(ellipse at center, rgba(120, 18, 12, .06) 22%, rgba(138, 29, 20, .45) 100%); }
+
+/* Clickable trauma map, bleeding pulses, and the three survival meters. */
+.vitals-panel { width: 238px; min-height: 126px; pointer-events: auto; }
+.vitals-info { pointer-events: none; }
+.injury-doll { pointer-events: auto; overflow: visible; }
+.doll-part { cursor: pointer; pointer-events: visiblePainted; }
+.doll-part.limb { pointer-events: stroke; }
+.doll-part.selected { filter: drop-shadow(0 0 5px rgba(174, 219, 166, .78)); }
+.doll-part.injured.selected { filter: drop-shadow(0 0 7px rgba(255, 79, 65, .9)); }
+.doll-part:focus-visible { outline: none; filter: drop-shadow(0 0 6px rgba(202, 236, 172, .9)); }
+.bleed-marker { display: none; fill: #ff302b; stroke: #ffd2c6; stroke-width: 1.4; pointer-events: none; transform-box: fill-box; transform-origin: center; }
+.bleed-marker.active { display: block; animation: bleed-pulse .92s ease-in-out infinite; }
+@keyframes bleed-pulse { 0%,100% { opacity: .55; transform: scale(.72); } 50% { opacity: 1; transform: scale(1.42); } }
+.vital-meter + .vital-meter { margin-top: 8px; }
+.thirst-track.vital-track i { background: #78aeb6; box-shadow: 0 0 6px rgba(105, 180, 205, .36); }
+.injury-status { min-height: 8px; margin-top: 7px; font-size: 6px; letter-spacing: .14em; }
+
+/* Anomaly-inspired three-column inventory, with an animated original 3D operator preview. */
+.inventory-panel { width: min(920px, 96vw); padding: 16px 20px 11px; }
+.inventory-body { grid-template-columns: minmax(130px, .78fr) minmax(250px, 1.45fr) minmax(155px, .9fr); gap: 13px; padding: 12px 0 10px; }
+.inventory-character, .inventory-grid-column { min-width: 0; }
+.inventory-column-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 7px; color: #8d9a8b; font-size: 7px; letter-spacing: .15em; }
+.inventory-column-heading b { color: #b5c293; font-size: 7px; font-weight: 600; }
+.inventory-preview-frame { position: relative; height: 218px; overflow: hidden; border: 1px solid rgba(174, 194, 165, .19); background: radial-gradient(ellipse at 50% 40%, rgba(103, 123, 91, .28), rgba(15, 23, 19, .92) 73%); }
+.inventory-preview-frame::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background-image: linear-gradient(rgba(162, 184, 145, .07) 1px, transparent 1px), linear-gradient(90deg, rgba(162, 184, 145, .07) 1px, transparent 1px); background-size: 18px 18px; mask-image: linear-gradient(transparent 3%, rgba(0,0,0,.7) 70%, transparent); }
+.inventory-preview-frame canvas { position: absolute; z-index: 2; inset: 0; display: block; width: 100%; height: 100%; }
+.inventory-preview-fallback { display: none; position: absolute; z-index: 3; inset: 0; align-items: center; justify-content: center; flex-direction: column; color: #a6b08e; font-size: 11px; letter-spacing: .2em; text-align: center; }
+.inventory-preview-fallback.visible { display: flex; }
+.inventory-preview-fallback span { margin-top: 6px; color: #667467; font-size: 7px; }
+.preview-axis { position: absolute; z-index: 4; left: 7px; bottom: 6px; color: rgba(161, 183, 144, .48); font-size: 5px; letter-spacing: .16em; pointer-events: none; }
+.operator-caption { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: #778577; font-size: 5px; letter-spacing: .1em; }
+.operator-caption .status-led { width: 4px; height: 4px; flex: none; }
+.inventory-grid-wrap { padding: 7px; }
+.inventory-grid { grid-template-rows: repeat(5, 35px); gap: 3px; }
+.inventory-item { cursor: pointer; }
+.inventory-item.selected { border-color: #e0d08d; background: linear-gradient(145deg, rgba(139, 134, 81, .94), rgba(57, 60, 37, .98)); box-shadow: 0 0 0 1px rgba(221, 203, 130, .24), inset 0 0 14px rgba(219, 204, 139, .14); }
+.inventory-side { min-width: 0; padding: 3px 0; }
+.carry-weight b { font-size: 18px; }
+.inventory-selection { margin-top: 14px; padding: 9px 8px 8px; border: 1px solid rgba(183, 199, 157, .16); border-left: 2px solid rgba(183, 199, 157, .5); background: rgba(7, 12, 10, .38); }
+.selection-kicker { color: #879581; font-size: 6px; letter-spacing: .14em; }
+.inventory-selection h3 { min-height: 21px; margin: 6px 0; color: #d8dfcd; font-size: 8px; line-height: 1.45; letter-spacing: .08em; }
+.selection-weight { display: flex; justify-content: space-between; padding: 5px 0; border-top: 1px solid rgba(182, 198, 159, .1); border-bottom: 1px solid rgba(182, 198, 159, .1); color: #829080; font-size: 6px; letter-spacing: .1em; }
+.selection-weight b { color: #c9d3b5; font-size: 7px; }
+.inventory-selection p { min-height: 39px; margin: 7px 0; color: #929b8b; font-size: 7px; line-height: 1.55; }
+.inventory-take { width: 100%; min-height: 26px; padding: 4px; border: 1px solid rgba(167, 191, 131, .45); color: #d2ddbd; background: rgba(89, 111, 68, .25); font-size: 6px; font-weight: 700; letter-spacing: .09em; cursor: pointer; }
+.inventory-take:disabled { border-color: rgba(136, 148, 126, .16); color: #657064; background: rgba(60, 70, 57, .12); cursor: default; }
+.inventory-message { min-height: 21px; margin-top: 7px; font-size: 6px; line-height: 1.5; }
+.inventory-legend { margin-top: 7px; font-size: 5px; }
+.inventory-footer { padding-top: 7px; }
+
+.death-overlay { position: absolute; z-index: 40; inset: 0; display: none; align-items: center; justify-content: center; overflow: hidden; padding: 22px; background: rgba(25, 0, 0, .28); }
+.death-overlay.visible { display: flex; }
+.death-blood-wash { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(97, 0, 0, .12) 3%, rgba(104, 0, 0, .48) 58%, rgba(14, 0, 0, .9) 100%); animation: death-blood 1.5s ease-out both; pointer-events: none; }
+@keyframes death-blood { from { opacity: .08; } to { opacity: 1; } }
+.death-card { position: relative; width: min(390px, 90vw); padding: 22px 24px 18px; border: 1px solid rgba(218, 105, 83, .42); border-top: 2px solid #b34436; background: linear-gradient(145deg, rgba(25, 15, 14, .94), rgba(9, 11, 10, .96)); box-shadow: 0 20px 70px rgba(0,0,0,.55); text-align: center; }
+.death-kicker { color: #ba776b; font-size: 7px; letter-spacing: .18em; }
+.death-card h2 { margin: 13px 0 7px; color: #f0c8bd; font-size: clamp(18px, 4vw, 26px); letter-spacing: .14em; }
+.death-card p { margin: 0 0 17px; color: #ab766d; font-size: 8px; letter-spacing: .12em; }
+.death-restart { width: 100%; height: 38px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; border: 1px solid rgba(201, 91, 72, .55); color: #efd8cc; background: linear-gradient(90deg, rgba(119, 44, 35, .72), rgba(50, 26, 23, .76)); font-size: 8px; font-weight: 700; letter-spacing: .11em; cursor: pointer; }
+.death-restart b { color: #e3a18f; font-size: 14px; font-weight: 400; }
+body.dead .joystick, body.dead .action-button, body.dead .place-button, body.dead .held-tag { opacity: 0; pointer-events: none; }
+
+@media (max-width: 760px) {
+  .vitals-panel { left: 10px; bottom: 124px; width: 205px; min-height: 104px; gap: 6px; padding: 5px 8px 4px 5px; }
+  .injury-doll { width: 43px; height: 78px; }
+  .vital-heading { font-size: 6px; }
+  .vital-heading b { font-size: 8px; }
+  .vital-meter + .vital-meter { margin-top: 6px; }
+  .vital-track { margin-top: 3px; height: 2px; }
+  .injury-status { margin-top: 5px; font-size: 5px; }
+  .place-button { right: 14px; bottom: 88px; height: 31px; min-width: 104px; padding: 0 7px; font-size: 6px; }
+  .stash-button { right: 124px; min-width: 105px; }
+  .inventory-panel { width: min(720px, 96vw); padding: 11px 14px 8px; }
+  .inventory-body { grid-template-columns: minmax(100px, .72fr) minmax(210px, 1.5fr) minmax(116px, .85fr); gap: 8px; padding: 8px 0 7px; }
+  .inventory-preview-frame { height: 174px; }
+  .inventory-grid { grid-template-rows: repeat(5, 31px); gap: 3px; }
+  .inventory-item { padding: 2px 3px; }
+  .inventory-item-icon { font-size: 14px; }
+  .inventory-item-name { font-size: 5px; }
+  .inventory-empty small { font-size: 6px; }
+  .inventory-selection { margin-top: 9px; padding: 6px; }
+  .inventory-selection h3 { font-size: 7px; min-height: 18px; }
+  .inventory-selection p { min-height: 34px; font-size: 6px; }
+  .inventory-message { margin-top: 5px; font-size: 5px; }
+  .inventory-legend { margin-top: 5px; font-size: 4px; }
+  .inventory-footer { font-size: 5px; gap: 5px; }
+  .inventory-footer b { font-size: 5px; }
+}
+@media (max-height: 420px) {
+  .vitals-panel { bottom: 135px; transform: scale(.86); transform-origin: bottom left; }
+  .inventory-overlay { padding: 8px; }
+  .inventory-panel { padding-top: 8px; padding-bottom: 6px; }
+  .inventory-header { padding-bottom: 7px; }
+  .inventory-body { padding: 6px 0 5px; }
+  .inventory-preview-frame { height: 135px; }
+  .inventory-grid { grid-template-rows: repeat(5, 24px); }
+  .inventory-selection { margin-top: 5px; padding: 5px; }
+  .inventory-selection h3 { min-height: 14px; margin: 4px 0; }
+  .inventory-selection p { min-height: 20px; margin: 4px 0; }
+  .inventory-take { min-height: 22px; }
+  .inventory-message, .inventory-legend { display: none; }
+  .inventory-footer { padding-top: 5px; }
+}

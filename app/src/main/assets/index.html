@@ -34,15 +34,22 @@
   </header>
 
   <section class="vitals-panel" aria-label="Здоровье и состояние тела">
-    <svg class="injury-doll" viewBox="0 0 82 142" aria-label="Схема травм">
-      <circle id="injury-head" class="doll-part" cx="41" cy="14" r="9" />
-      <path id="injury-neck" class="doll-part" d="M37 24h8v8h-8z" />
-      <path id="injury-torso" class="doll-part" d="M31 33 Q41 28 51 33 L56 68 L49 77 L33 77 L26 68 Z" />
-      <path id="injury-arm-left" class="doll-part limb" d="M30 39 22 54 17 72" />
-      <path id="injury-arm-right" class="doll-part limb" d="M52 39 60 54 65 72" />
-      <path id="injury-leg-left" class="doll-part limb" d="M35 75 32 101 28 127" />
-      <path id="injury-leg-right" class="doll-part limb" d="M47 75 50 101 54 127" />
+    <svg class="injury-doll" id="injury-doll" viewBox="0 0 82 142" role="group" aria-label="Интерактивная схема травм">
+      <circle id="injury-head" class="doll-part" cx="41" cy="14" r="9" role="button" tabindex="0" aria-label="Голова" />
+      <path id="injury-neck" class="doll-part" d="M37 24h8v8h-8z" role="button" tabindex="0" aria-label="Шея" />
+      <path id="injury-torso" class="doll-part" d="M31 33 Q41 28 51 33 L56 68 L49 77 L33 77 L26 68 Z" role="button" tabindex="0" aria-label="Торс" />
+      <path id="injury-arm-left" class="doll-part limb" d="M30 39 22 54 17 72" role="button" tabindex="0" aria-label="Левая рука" />
+      <path id="injury-arm-right" class="doll-part limb" d="M52 39 60 54 65 72" role="button" tabindex="0" aria-label="Правая рука" />
+      <path id="injury-leg-left" class="doll-part limb" d="M35 75 32 101 28 127" role="button" tabindex="0" aria-label="Левая нога" />
+      <path id="injury-leg-right" class="doll-part limb" d="M47 75 50 101 54 127" role="button" tabindex="0" aria-label="Правая нога" />
       <path class="doll-detail" d="M33 53h16M41 33v42M27 69h28M26 129h8M50 129h8" />
+      <circle id="bleed-head" class="bleed-marker" cx="41" cy="14" r="3.5" />
+      <circle id="bleed-neck" class="bleed-marker" cx="41" cy="28" r="3.5" />
+      <circle id="bleed-torso" class="bleed-marker" cx="48" cy="55" r="4" />
+      <circle id="bleed-arm-left" class="bleed-marker" cx="21" cy="55" r="3" />
+      <circle id="bleed-arm-right" class="bleed-marker" cx="61" cy="55" r="3" />
+      <circle id="bleed-leg-left" class="bleed-marker" cx="31" cy="101" r="3" />
+      <circle id="bleed-leg-right" class="bleed-marker" cx="51" cy="101" r="3" />
     </svg>
     <div class="vitals-info">
       <div class="vital-meter">
@@ -50,10 +57,14 @@
         <div class="vital-track health-track"><i id="health-bar"></i></div>
       </div>
       <div class="vital-meter hunger-meter">
-        <div class="vital-heading"><span>СЫТОСТЬ</span><b><strong id="hunger-value">100</strong><small>%</small></b></div>
+        <div class="vital-heading"><span>ГОЛОД</span><b><strong id="hunger-value">100</strong><small>%</small></b></div>
         <div class="vital-track hunger-track"><i id="hunger-bar"></i></div>
       </div>
-      <div id="injury-status" class="injury-status">ТРАВМ НЕТ</div>
+      <div class="vital-meter thirst-meter">
+        <div class="vital-heading"><span>ЖАЖДА</span><b><strong id="thirst-value">100</strong><small>%</small></b></div>
+        <div class="vital-track thirst-track"><i id="thirst-bar"></i></div>
+      </div>
+      <div id="injury-status" class="injury-status">ТРАВМ НЕТ · НАЖМИТЕ НА СХЕМУ</div>
     </div>
   </section>
 
@@ -97,19 +108,48 @@
         <button id="inventory-close" class="inventory-close" aria-label="Закрыть рюкзак">×</button>
       </header>
       <div class="inventory-body">
-        <div class="inventory-grid-wrap">
-          <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
-          <div id="inventory-empty" class="inventory-empty">РЮКЗАК ПУСТ<br><small>Удерживая предмет, нажмите «В РЮКЗАК»</small></div>
+        <aside class="inventory-character" aria-label="Модель персонажа">
+          <div class="inventory-column-heading"><span>ОПЕРАТОР</span><b>01</b></div>
+          <div id="inventory-preview-frame" class="inventory-preview-frame">
+            <canvas id="inventory-preview-canvas" aria-label="Вращающаяся 3D-модель оператора"></canvas>
+            <div id="inventory-preview-fallback" class="inventory-preview-fallback" aria-hidden="true">ОПЕРАТОР<br><span>ЭКИПИРОВКА</span></div>
+            <div class="preview-axis">ПОЛИГОН · СЕКТОР 01</div>
+          </div>
+          <div class="operator-caption"><span class="status-led"></span> СНАРЯЖЕНИЕ · ПОЛЕВОЙ КОМПЛЕКТ</div>
+        </aside>
+        <div class="inventory-grid-column">
+          <div class="inventory-column-heading"><span>СЕТКА РЮКЗАКА</span><b>8 × 5</b></div>
+          <div class="inventory-grid-wrap">
+            <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
+            <div id="inventory-empty" class="inventory-empty">РЮКЗАК ПУСТ<br><small>Удерживая предмет, нажмите «В РЮКЗАК»</small></div>
+          </div>
         </div>
         <aside class="inventory-side">
           <div class="carry-caption">МАССА СНАРЯЖЕНИЯ</div>
           <div class="carry-weight"><b id="inventory-weight">0.0</b><span> / <i id="inventory-limit">30.0</i> кг</span></div>
           <div class="carry-track"><i id="inventory-weight-bar"></i></div>
-          <div id="inventory-message" class="inventory-message">Ячейки 8 × 5<br>Коснитесь предмета, чтобы достать его.</div>
-          <div class="inventory-legend"><span class="legend-dot"></span> КАЖДЫЙ ПРЕДМЕТ ЗАНИМАЕТ СВОЙ ОБЪЁМ</div>
+          <section class="inventory-selection" aria-live="polite">
+            <div class="selection-kicker">ОПИСАНИЕ ПРЕДМЕТА</div>
+            <h3 id="inventory-selected-name">ПРЕДМЕТ НЕ ВЫБРАН</h3>
+            <div class="selection-weight"><span>МАССА</span><b id="inventory-selected-weight">—</b></div>
+            <p id="inventory-selected-description">Нажмите на предмет в сетке, чтобы посмотреть его параметры.</p>
+            <button id="inventory-take" class="inventory-take" type="button" disabled>ВЫБЕРИТЕ ПРЕДМЕТ</button>
+          </section>
+          <div id="inventory-message" class="inventory-message">Выберите предмет, чтобы увидеть параметры.</div>
+          <div class="inventory-legend"><span class="legend-dot"></span> РАЗМЕР ЯЧЕЙКИ ЗАВИСИТ ОТ ФОРМЫ ПРЕДМЕТА</div>
         </aside>
       </div>
       <footer class="inventory-footer"><span>ТАБ / ESC</span><i></i><span>ЗАКРЫТЬ РЮКЗАК</span><b>ОФЛАЙН · ЛОКАЛЬНОЕ ХРАНЕНИЕ</b></footer>
+    </section>
+  </div>
+
+  <div id="death-overlay" class="death-overlay" aria-hidden="true">
+    <div class="death-blood-wash"></div>
+    <section class="death-card" role="dialog" aria-modal="true" aria-labelledby="death-title">
+      <span class="death-kicker">СИСТЕМА ЖИЗНЕОБЕСПЕЧЕНИЯ · ОТКЛЮЧЕНА</span>
+      <h2 id="death-title">ОПЕРАТОР ПОГИБ</h2>
+      <p id="death-detail">КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ</p>
+      <button id="death-restart" class="death-restart" type="button">ПЕРЕЗАПУСТИТЬ ИСПЫТАНИЕ <b>↻</b></button>
     </section>
   </div>
 
@@ -124,7 +164,7 @@
       <button id="start-button" class="start-button"><span>НАЧАТЬ ИСПЫТАНИЕ</span><b>↗</b></button>
       <div class="intro-footer"><span>ОФЛАЙН РЕЖИМ</span><i></i><span>БЕЗ СЮЖЕТА · ТОЛЬКО ФИЗИКА</span></div>
     </div>
-    <div class="intro-version">ANDROID BUILD <span>1.1</span></div>
+    <div class="intro-version">ANDROID BUILD <span>1.2</span></div>
   </div>
 
   <script src="game.js"></script>
