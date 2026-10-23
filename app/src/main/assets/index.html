@@ -24,16 +24,37 @@
     <div class="offline-pill"><span class="offline-dot"></span> ОФЛАЙН · ЛОКАЛЬНАЯ СИМУЛЯЦИЯ</div>
     <div class="top-right">
       <div class="sector-readout"><span>СЕКТОР</span><b>БЕТОННАЯ КАМЕРА</b></div>
+      <button id="inventory-button" class="icon-button" aria-label="Открыть рюкзак" title="Рюкзак · Tab">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V5.8A2.8 2.8 0 0 1 10.8 3h2.4A2.8 2.8 0 0 1 16 5.8V7M6 7h12l1.5 13h-15L6 7Z"/><path d="M9 11v2M15 11v2M8 7a4 4 0 0 0 8 0"/></svg>
+      </button>
       <button id="reset-button" class="icon-button" aria-label="Сбросить испытание" title="Сбросить испытание">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>
       </button>
     </div>
   </header>
 
-  <section class="telemetry" aria-label="Показания">
-    <div class="telemetry-row"><span class="telemetry-icon pulse-icon"></span><span>СОСТОЯНИЕ</span><b id="health-label">НОРМА</b></div>
-    <div class="health-track"><i id="health-bar"></i></div>
-    <div class="telemetry-foot"><span>ОПЕРАТОР</span><strong id="health-value">100</strong><span class="unit">%</span></div>
+  <section class="vitals-panel" aria-label="Здоровье и состояние тела">
+    <svg class="injury-doll" viewBox="0 0 82 142" aria-label="Схема травм">
+      <circle id="injury-head" class="doll-part" cx="41" cy="14" r="9" />
+      <path id="injury-neck" class="doll-part" d="M37 24h8v8h-8z" />
+      <path id="injury-torso" class="doll-part" d="M31 33 Q41 28 51 33 L56 68 L49 77 L33 77 L26 68 Z" />
+      <path id="injury-arm-left" class="doll-part limb" d="M30 39 22 54 17 72" />
+      <path id="injury-arm-right" class="doll-part limb" d="M52 39 60 54 65 72" />
+      <path id="injury-leg-left" class="doll-part limb" d="M35 75 32 101 28 127" />
+      <path id="injury-leg-right" class="doll-part limb" d="M47 75 50 101 54 127" />
+      <path class="doll-detail" d="M33 53h16M41 33v42M27 69h28M26 129h8M50 129h8" />
+    </svg>
+    <div class="vitals-info">
+      <div class="vital-meter">
+        <div class="vital-heading"><span>ЗДОРОВЬЕ</span><b><strong id="health-value">100</strong><small>%</small></b></div>
+        <div class="vital-track health-track"><i id="health-bar"></i></div>
+      </div>
+      <div class="vital-meter hunger-meter">
+        <div class="vital-heading"><span>СЫТОСТЬ</span><b><strong id="hunger-value">100</strong><small>%</small></b></div>
+        <div class="vital-track hunger-track"><i id="hunger-bar"></i></div>
+      </div>
+      <div id="injury-status" class="injury-status">ТРАВМ НЕТ</div>
+    </div>
   </section>
 
   <div class="center-reticle" id="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
@@ -44,7 +65,7 @@
   <div id="toast" class="toast"></div>
   <div id="held-tag" class="held-tag"><span class="held-dot"></span><span id="held-name">ПРЕДМЕТ ВЗЯТ</span><small>ФИЗИЧЕСКОЕ УДЕРЖАНИЕ</small></div>
 
-  <div class="controls-hint" id="controls-hint"><kbd>W A S D</kbd><span>ДВИЖЕНИЕ</span><i></i><kbd>МЫШЬ</kbd><span>ОБЗОР</span><i></i><kbd>E</kbd><span>ДЕЙСТВИЕ</span></div>
+  <div class="controls-hint" id="controls-hint"><kbd>W A S D</kbd><span>ДВИЖЕНИЕ</span><i></i><kbd>МЫШЬ</kbd><span>ОБЗОР</span><i></i><kbd>E</kbd><span>ДЕЙСТВИЕ</span><i></i><kbd>TAB</kbd><span>РЮКЗАК</span></div>
 
   <div id="joystick" class="joystick" aria-label="Виртуальный джойстик">
     <div class="joystick-ring"><div id="joystick-knob" class="joystick-knob"><span></span></div></div>
@@ -56,10 +77,41 @@
     <span class="action-icon" id="action-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
     <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b><small id="action-subtitle">ВЫБЕРИТЕ ЦЕЛЬ</small></span>
   </button>
+  <button id="stash-button" class="place-button stash-button" aria-label="Убрать предмет в рюкзак">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V5.8A2.8 2.8 0 0 1 10.8 3h2.4A2.8 2.8 0 0 1 16 5.8V7M6 7h12l1.5 13h-15L6 7Z"/><path d="M12 10v6m-3-3h6"/></svg>
+    <span>В РЮКЗАК</span>
+  </button>
+  <button id="place-button" class="place-button" aria-label="Положить предмет">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>
+    <span>ПОЛОЖИТЬ</span>
+  </button>
 
   <div class="bottom-status"><span class="status-led"></span> ФИЗИЧЕСКИЙ ДВИЖОК <b>АКТИВЕН</b><i></i><span>РАГДОЛЛЫ</span><b id="ragdoll-count">0 / 2</b></div>
 
   <div id="rotate-hint" class="rotate-hint"><div class="rotate-icon">↻</div><b>ПОВЕРНИТЕ УСТРОЙСТВО</b><span>Игра работает в горизонтальном режиме</span></div>
+
+  <div id="inventory-overlay" class="inventory-overlay" aria-hidden="true">
+    <section class="inventory-panel" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
+      <header class="inventory-header">
+        <div><span class="inventory-kicker">СНАРЯЖЕНИЕ ОПЕРАТОРА</span><h2 id="inventory-title">РЮКЗАК <small>01</small></h2></div>
+        <button id="inventory-close" class="inventory-close" aria-label="Закрыть рюкзак">×</button>
+      </header>
+      <div class="inventory-body">
+        <div class="inventory-grid-wrap">
+          <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
+          <div id="inventory-empty" class="inventory-empty">РЮКЗАК ПУСТ<br><small>Удерживая предмет, нажмите «В РЮКЗАК»</small></div>
+        </div>
+        <aside class="inventory-side">
+          <div class="carry-caption">МАССА СНАРЯЖЕНИЯ</div>
+          <div class="carry-weight"><b id="inventory-weight">0.0</b><span> / <i id="inventory-limit">30.0</i> кг</span></div>
+          <div class="carry-track"><i id="inventory-weight-bar"></i></div>
+          <div id="inventory-message" class="inventory-message">Ячейки 8 × 5<br>Коснитесь предмета, чтобы достать его.</div>
+          <div class="inventory-legend"><span class="legend-dot"></span> КАЖДЫЙ ПРЕДМЕТ ЗАНИМАЕТ СВОЙ ОБЪЁМ</div>
+        </aside>
+      </div>
+      <footer class="inventory-footer"><span>ТАБ / ESC</span><i></i><span>ЗАКРЫТЬ РЮКЗАК</span><b>ОФЛАЙН · ЛОКАЛЬНОЕ ХРАНЕНИЕ</b></footer>
+    </section>
+  </div>
 
   <div id="intro" class="intro-screen">
     <div class="intro-grid"></div>
@@ -72,7 +124,7 @@
       <button id="start-button" class="start-button"><span>НАЧАТЬ ИСПЫТАНИЕ</span><b>↗</b></button>
       <div class="intro-footer"><span>ОФЛАЙН РЕЖИМ</span><i></i><span>БЕЗ СЮЖЕТА · ТОЛЬКО ФИЗИКА</span></div>
     </div>
-    <div class="intro-version">ANDROID BUILD <span>1.0</span></div>
+    <div class="intro-version">ANDROID BUILD <span>1.1</span></div>
   </div>
 
   <script src="game.js"></script>

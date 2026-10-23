@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --format=iife --target=es2020 --minify --outfile=../app/src/main/assets/game.js"
+    "build": "esbuild src/main.js --bundle --format=iife --target=es2020 --minify --outfile=../app/src/main/assets/game.js",
+    "test:physics": "node tests/physics-smoke.mjs"
   },
   "dependencies": {
     "cannon-es": "0.20.0",

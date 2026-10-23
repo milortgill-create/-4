@@ -45,6 +45,7 @@ jobs:
         working-directory: web
         run: |
           npm ci --no-audit --no-fund
+          npm run test:physics
           npm run build
 
       - name: Set up Gradle 8.9

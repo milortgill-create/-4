@@ -42,6 +42,11 @@ const floorPhysicsMaterial = new CANNON.Material('concrete');
 const objectPhysicsMaterial = new CANNON.Material('test-props');
 const playerPhysicsMaterial = new CANNON.Material('operator');
 const dummyPhysicsMaterial = new CANNON.Material('mannequin');
+const COLLISION_GROUP_WORLD = 1;
+const COLLISION_GROUP_PLAYER = 2;
+const COLLISION_GROUP_PROPS = 4;
+const COLLISION_GROUP_RAGDOLL = 8;
+const COLLISION_MASK_ALL = COLLISION_GROUP_WORLD | COLLISION_GROUP_PLAYER | COLLISION_GROUP_PROPS | COLLISION_GROUP_RAGDOLL;
 world.addContactMaterial(new CANNON.ContactMaterial(floorPhysicsMaterial, objectPhysicsMaterial, { friction: 0.75, restitution: 0.06, contactEquationStiffness: 1e7, contactEquationRelaxation: 3 }));
 world.addContactMaterial(new CANNON.ContactMaterial(objectPhysicsMaterial, objectPhysicsMaterial, { friction: 0.55, restitution: 0.09 }));
 world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, floorPhysicsMaterial, { friction: 0.0, restitution: 0.0 }));
@@ -62,7 +67,7 @@ function seededRandom(seed) {
 }
 
 function makeConcreteTexture(base, seed, repeatX, repeatY) {
-  const size = 256;
+  const size = 512;
   const ctxCanvas = document.createElement('canvas');
   ctxCanvas.width = size;
   ctxCanvas.height = size;
@@ -89,7 +94,45 @@ function makeConcreteTexture(base, seed, repeatX, repeatY) {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(repeatX, repeatY);
-  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 4);
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  return texture;
+}
+
+function makeWoodTexture(base, seed) {
+  const width = 512, height = 256;
+  const woodCanvas = document.createElement('canvas');
+  woodCanvas.width = width;
+  woodCanvas.height = height;
+  const ctx = woodCanvas.getContext('2d', { willReadFrequently: true });
+  const rgb = [parseInt(base.slice(1, 3), 16), parseInt(base.slice(3, 5), 16), parseInt(base.slice(5, 7), 16)];
+  const random = seededRandom(seed);
+  const pixels = ctx.createImageData(width, height);
+  for (let y = 0; y < height; y++) {
+    const grainWave = Math.sin(y * 0.14) * 4 + Math.sin(y * 0.037) * 7;
+    for (let x = 0; x < width; x++) {
+      const grain = grainWave + (random() - 0.5) * 18;
+      const i = (y * width + x) * 4;
+      pixels.data[i] = Math.max(0, Math.min(255, rgb[0] + grain));
+      pixels.data[i + 1] = Math.max(0, Math.min(255, rgb[1] + grain * 0.82));
+      pixels.data[i + 2] = Math.max(0, Math.min(255, rgb[2] + grain * 0.62));
+      pixels.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+  for (let i = 0; i < 175; i++) {
+    const y = random() * height;
+    ctx.strokeStyle = random() > 0.5 ? 'rgba(39,25,13,.19)' : 'rgba(255,226,171,.12)';
+    ctx.lineWidth = random() * 1.4 + 0.25;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(width * 0.33, y + (random() - 0.5) * 12, width * 0.67, y + (random() - 0.5) * 9, width, y + (random() - 0.5) * 6);
+    ctx.stroke();
+  }
+  const texture = new THREE.CanvasTexture(woodCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(1.5, 1);
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
   return texture;
 }
 
@@ -113,9 +156,12 @@ function makeCanvasLabel(topLine, bottomLine, accent = '#9bdac1') {
 const wallTexture = makeConcreteTexture('#50595a', 19, 2, 1.6);
 const floorTexture = makeConcreteTexture('#434b4b', 81, 3.2, 2.5);
 const ceilingTexture = makeConcreteTexture('#30393b', 41, 2.5, 2.2);
-const concreteWall = new THREE.MeshStandardMaterial({ map: wallTexture, color: 0xc8ceca, roughness: 0.96, metalness: 0.02 });
-const concreteFloor = new THREE.MeshStandardMaterial({ map: floorTexture, color: 0xc4ccca, roughness: 0.98, metalness: 0.02 });
-const concreteCeiling = new THREE.MeshStandardMaterial({ map: ceilingTexture, color: 0xaab3b1, roughness: 0.96 });
+const wallBumpTexture = wallTexture.clone(); wallBumpTexture.colorSpace = THREE.NoColorSpace;
+const floorBumpTexture = floorTexture.clone(); floorBumpTexture.colorSpace = THREE.NoColorSpace;
+const ceilingBumpTexture = ceilingTexture.clone(); ceilingBumpTexture.colorSpace = THREE.NoColorSpace;
+const concreteWall = new THREE.MeshStandardMaterial({ map: wallTexture, bumpMap: wallBumpTexture, bumpScale: 0.065, color: 0xc8ceca, roughness: 0.96, metalness: 0.02 });
+const concreteFloor = new THREE.MeshStandardMaterial({ map: floorTexture, bumpMap: floorBumpTexture, bumpScale: 0.048, color: 0xc4ccca, roughness: 0.98, metalness: 0.02 });
+const concreteCeiling = new THREE.MeshStandardMaterial({ map: ceilingTexture, bumpMap: ceilingBumpTexture, bumpScale: 0.032, color: 0xaab3b1, roughness: 0.96 });
 const darkConcrete = new THREE.MeshStandardMaterial({ color: 0x303a3c, roughness: 0.9 });
 const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1b2528, roughness: 0.72, metalness: 0.28 });
 const warningMaterial = new THREE.MeshStandardMaterial({ color: 0xd5aa55, roughness: 0.8, metalness: 0.06 });
@@ -126,28 +172,43 @@ scene.add(new THREE.AmbientLight(0x7d9291, 0.48));
 const keyLight = new THREE.DirectionalLight(0xffe7c7, 2.15);
 keyLight.position.set(-3.8, 8.5, 4.5);
 keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(1024, 1024);
+keyLight.shadow.mapSize.set(1536, 1536);
 keyLight.shadow.camera.left = -11; keyLight.shadow.camera.right = 11;
 keyLight.shadow.camera.top = 9; keyLight.shadow.camera.bottom = -9;
 keyLight.shadow.camera.near = 0.5; keyLight.shadow.camera.far = 25;
 keyLight.shadow.bias = -0.00018;
 keyLight.shadow.normalBias = 0.025;
+keyLight.shadow.radius = 4;
 scene.add(keyLight);
 
-function addPointLamp(x, z, tint = 0xc2ebe0) {
+function addPointLamp(x, z, tint = 0xc2ebe0, castSoftShadow = false) {
   const casing = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.1, 0.25), trimMaterial);
   casing.position.set(x, 5.66, z);
   casing.castShadow = false; casing.receiveShadow = true; scene.add(casing);
-  const lens = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.035, 0.13), new THREE.MeshStandardMaterial({ color: tint, emissive: tint, emissiveIntensity: 1.65, roughness: 0.3 }));
+  const lens = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.035, 0.13), new THREE.MeshStandardMaterial({ color: tint, emissive: tint, emissiveIntensity: 1.35, roughness: 0.3 }));
   lens.position.set(x, 5.585, z); scene.add(lens);
-  const lamp = new THREE.PointLight(tint, 17, 8.4, 2);
-  lamp.position.set(x, 5.35, z);
-  scene.add(lamp);
+  if (castSoftShadow) {
+    const lamp = new THREE.SpotLight(tint, 42, 12, Math.PI / 3, 0.58, 1.6);
+    lamp.position.set(x, 5.35, z);
+    lamp.target.position.set(x, 0.15, z);
+    lamp.castShadow = true;
+    lamp.shadow.mapSize.set(512, 512);
+    lamp.shadow.camera.near = 0.2;
+    lamp.shadow.camera.far = 13;
+    lamp.shadow.bias = -0.00035;
+    lamp.shadow.normalBias = 0.035;
+    lamp.shadow.radius = 4;
+    scene.add(lamp, lamp.target);
+  } else {
+    const lamp = new THREE.PointLight(tint, 8.5, 8.4, 2);
+    lamp.position.set(x, 5.35, z);
+    scene.add(lamp);
+  }
 }
-addPointLamp(-4.3, -2.8, 0xb3dcd6);
-addPointLamp(0.4, -2.7, 0xd3e2cf);
-addPointLamp(4.4, -2.5, 0xa8d0d5);
-addPointLamp(0.0, 4.25, 0x9abdc0);
+addPointLamp(-4.3, -2.8, 0xb3dcd6, true);
+addPointLamp(0.4, -2.7, 0xd3e2cf, false);
+addPointLamp(4.4, -2.5, 0xa8d0d5, true);
+addPointLamp(0.0, 4.25, 0x9abdc0, false);
 
 function addStaticBoxMesh(geometry, material, position, options = {}) {
   const mesh = new THREE.Mesh(geometry, material);
@@ -160,7 +221,12 @@ function addStaticBoxMesh(geometry, material, position, options = {}) {
 }
 
 function addStaticCollider(position, halfExtents, material = floorPhysicsMaterial) {
-  const body = new CANNON.Body({ mass: 0, material });
+  const body = new CANNON.Body({
+    mass: 0,
+    material,
+    collisionFilterGroup: COLLISION_GROUP_WORLD,
+    collisionFilterMask: COLLISION_MASK_ALL
+  });
   body.addShape(new CANNON.Box(new CANNON.Vec3(halfExtents[0], halfExtents[1], halfExtents[2])));
   body.position.set(position[0], position[1], position[2]);
   world.addBody(body);
@@ -216,10 +282,20 @@ function addRoom() {
 }
 addRoom();
 
+const woodMaps = [
+  makeWoodTexture('#846744', 213),
+  makeWoodTexture('#725a40', 932),
+  makeWoodTexture('#9a7950', 612)
+];
+const woodBumpMaps = woodMaps.map((texture) => {
+  const bump = texture.clone();
+  bump.colorSpace = THREE.NoColorSpace;
+  return bump;
+});
 const woodMaterials = [
-  new THREE.MeshStandardMaterial({ color: 0x866746, roughness: 0.88 }),
-  new THREE.MeshStandardMaterial({ color: 0x6f573d, roughness: 0.91 }),
-  new THREE.MeshStandardMaterial({ color: 0x9a784f, roughness: 0.83 })
+  new THREE.MeshStandardMaterial({ map: woodMaps[0], bumpMap: woodBumpMaps[0], bumpScale: 0.035, color: 0x866746, roughness: 0.88 }),
+  new THREE.MeshStandardMaterial({ map: woodMaps[1], bumpMap: woodBumpMaps[1], bumpScale: 0.035, color: 0x6f573d, roughness: 0.91 }),
+  new THREE.MeshStandardMaterial({ map: woodMaps[2], bumpMap: woodBumpMaps[2], bumpScale: 0.035, color: 0x9a784f, roughness: 0.83 })
 ];
 const crateTrim = new THREE.MeshStandardMaterial({ color: 0x302b24, roughness: 0.75, metalness: 0.15 });
 const bottleMaterials = [
@@ -250,6 +326,8 @@ function addPhysicsProp(meta, shape, mass, position, visual, yaw = 0, extra = {}
     mass,
     material: objectPhysicsMaterial,
     position: new CANNON.Vec3(position[0], position[1], position[2]),
+    collisionFilterGroup: COLLISION_GROUP_PROPS,
+    collisionFilterMask: COLLISION_MASK_ALL,
     linearDamping: extra.linearDamping ?? 0.08,
     angularDamping: extra.angularDamping ?? 0.18,
     allowSleep: true,
@@ -262,7 +340,17 @@ function addPhysicsProp(meta, shape, mass, position, visual, yaw = 0, extra = {}
     body.addShape(shape);
   }
   body.quaternion.setFromEuler(0, yaw, 0, 'YZX');
-  body.gameMeta = { ...meta, body, initialMass: mass, isHeld: false, lastVelocity: { x: 0, y: 0, z: 0 } };
+  body.gameMeta = {
+    ...meta,
+    body,
+    initialMass: mass,
+    isHeld: false,
+    isStored: false,
+    originalCollisionFilterMask: body.collisionFilterMask,
+    originalLinearDamping: body.linearDamping,
+    originalAngularDamping: body.angularDamping,
+    lastVelocity: { x: 0, y: 0, z: 0 }
+  };
   world.addBody(body);
   visual.position.copy(body.position);
   visual.quaternion.copy(body.quaternion);
@@ -275,7 +363,8 @@ function addPhysicsProp(meta, shape, mass, position, visual, yaw = 0, extra = {}
 
 function createCrateVisual(w, h, d, baseColor, label) {
   const group = new THREE.Group();
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.03 });
+  const woodIndex = Math.abs(Math.floor(baseColor)) % woodMaps.length;
+  const bodyMaterial = new THREE.MeshStandardMaterial({ map: woodMaps[woodIndex], bumpMap: woodBumpMaps[woodIndex], bumpScale: 0.04, color: baseColor, roughness: 0.9, metalness: 0.03 });
   const main = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), bodyMaterial);
   group.add(main);
   const beamW = Math.max(0.045, w * 0.075);
@@ -354,16 +443,48 @@ function createPlankVisual(length, width, thickness, variant) {
   return group;
 }
 
+function createShovelVisual() {
+  const group = new THREE.Group();
+  const handleMat = new THREE.MeshStandardMaterial({ map: woodMaps[2], bumpMap: woodBumpMaps[2], bumpScale: 0.025, color: 0x8c714d, roughness: 0.86 });
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0x788581, roughness: 0.42, metalness: 0.68 });
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.029, 0.96, 10), handleMat);
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(-0.09, 0.005, 0);
+  group.add(handle);
+  const grip = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.012, 6, 14), handleMat);
+  grip.position.set(-0.55, 0.01, 0);
+  grip.rotation.x = Math.PI / 2;
+  group.add(grip);
+  const socket = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.065, 0.075), steelMat);
+  socket.position.set(0.35, -0.005, 0);
+  group.add(socket);
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.045, 0.36), steelMat);
+  blade.position.set(0.49, -0.008, 0);
+  group.add(blade);
+  const bladeRidge = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.012, 0.035), new THREE.MeshStandardMaterial({ color: 0x9daaa3, roughness: 0.38, metalness: 0.75 }));
+  bladeRidge.position.set(0.48, 0.018, 0);
+  group.add(bladeRidge);
+  return group;
+}
+
 function addCrate(name, position, size, mass, hue, yaw = 0) {
   const [w, h, d] = size;
   const visual = createCrateVisual(w, h, d, hue, name);
-  const body = addPhysicsProp({ kind: 'prop', type: 'ЯЩИК', name, mass, detail: `${mass.toFixed(1)} КГ · ДЕРЕВО`, range: 4.5 }, new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)), mass, position, visual, yaw);
+  const body = addPhysicsProp({
+    kind: 'prop', type: 'ЯЩИК', name, mass,
+    detail: `${mass.toFixed(1)} КГ · ДЕРЕВО`, range: 4.5,
+    inventoryWidth: w > 0.88 ? 3 : 2, inventoryHeight: h > 0.88 ? 3 : 2, inventoryIcon: '▣'
+  }, new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)), mass, position, visual, yaw);
   return body;
 }
 function addBarrel(name, position, radius, height, mass, matIndex, yaw = 0) {
   const visual = createBarrelVisual(radius, height, matIndex, name);
   const shape = new CANNON.Cylinder(radius * 0.9, radius, height, 12);
-  return addPhysicsProp({ kind: 'prop', type: 'БОЧКА', name, mass, detail: `${mass.toFixed(0)} КГ · ТЯЖЁЛАЯ СТАЛЬ`, range: 4.4 }, shape, mass, position, visual, yaw, { angularDamping: 0.23 });
+  return addPhysicsProp({
+    kind: 'prop', type: 'БОЧКА', name, mass,
+    detail: `${mass.toFixed(0)} КГ · ТЯЖЁЛАЯ СТАЛЬ`, range: 4.4,
+    inventoryWidth: 2, inventoryHeight: 3, inventoryIcon: '◉'
+  }, shape, mass, position, visual, yaw, { angularDamping: 0.23 });
 }
 function addBottle(name, position, matIndex, yaw = 0) {
   const visual = createBottleVisual(matIndex, name);
@@ -371,11 +492,27 @@ function addBottle(name, position, matIndex, yaw = 0) {
     { shape: new CANNON.Cylinder(0.103, 0.103, 0.33, 10), offset: new CANNON.Vec3(0, -0.055, 0) },
     { shape: new CANNON.Cylinder(0.043, 0.043, 0.19, 9), offset: new CANNON.Vec3(0, 0.165, 0) }
   ];
-  return addPhysicsProp({ kind: 'prop', type: 'БУТЫЛКА', name, mass: 0.38, detail: '0.38 КГ · ЛЁГКОЕ СТЕКЛО', range: 3.8 }, shape, 0.38, position, visual, yaw, { linearDamping: 0.035, angularDamping: 0.12 });
+  return addPhysicsProp({
+    kind: 'prop', type: 'БУТЫЛКА', name, mass: 0.38,
+    detail: '0.38 КГ · ЛЁГКОЕ СТЕКЛО', range: 3.8,
+    inventoryWidth: 1, inventoryHeight: 1, inventoryIcon: '◉'
+  }, shape, 0.38, position, visual, yaw, { linearDamping: 0.035, angularDamping: 0.12 });
 }
 function addPlank(name, position, length, width, thickness, mass, yaw = 0) {
   const visual = createPlankVisual(length, width, thickness, (Math.abs(yaw) > 0.1) ? 1 : 0);
-  return addPhysicsProp({ kind: 'prop', type: 'ДОСКА', name, mass, detail: `${mass.toFixed(1)} КГ · СОСНА`, range: 4.3 }, new CANNON.Box(new CANNON.Vec3(length / 2, thickness / 2, width / 2)), mass, position, visual, yaw, { angularDamping: 0.21 });
+  return addPhysicsProp({
+    kind: 'prop', type: 'ДОСКА', name, mass,
+    detail: `${mass.toFixed(1)} КГ · СОСНА`, range: 4.3,
+    inventoryWidth: 1, inventoryHeight: 4, inventoryIcon: '▬'
+  }, new CANNON.Box(new CANNON.Vec3(length / 2, thickness / 2, width / 2)), mass, position, visual, yaw, { angularDamping: 0.21 });
+}
+function addShovel(name, position, yaw = 0) {
+  const visual = createShovelVisual();
+  return addPhysicsProp({
+    kind: 'prop', type: 'ЛОПАТА', name, mass: 3.6,
+    detail: '3.6 КГ · СТАЛЬ / ДЕРЕВО', range: 4.5,
+    inventoryWidth: 2, inventoryHeight: 4, inventoryIcon: '⚒'
+  }, new CANNON.Box(new CANNON.Vec3(0.64, 0.07, 0.2)), 3.6, position, visual, yaw, { angularDamping: 0.3 });
 }
 
 // Fixed masses, starting positions and footprints keep every prop clear of the floor and one another.
@@ -396,6 +533,7 @@ addPlank('ДОСКА P-01', [-1.45, 0.085, -4.1], 2.35, 0.36, 0.15, 3.4, 0.06);
 addPlank('ДОСКА P-02', [-0.2, 0.09, -4.35], 2.0, 0.32, 0.16, 3.1, -0.33);
 addPlank('ДОСКА P-03', [0.85, 0.075, 1.05], 2.7, 0.4, 0.13, 4.2, 0.52);
 addPlank('ДОСКА P-04', [6.15, 0.08, 2.2], 2.15, 0.3, 0.14, 3.0, -0.13);
+addShovel('ЛОПАТА S-01', [-5.55, 0.07, 2.7], -0.25);
 
 const dummySkinMaterials = [
   new THREE.MeshStandardMaterial({ color: 0xa6b8b6, roughness: 0.73, metalness: 0.14 }),
@@ -424,6 +562,8 @@ function addRagdollPart(human, key, size, mass, position, material = human.skin,
     type: CANNON.Body.KINEMATIC,
     material: dummyPhysicsMaterial,
     position: new CANNON.Vec3(position[0], position[1], position[2]),
+    collisionFilterGroup: COLLISION_GROUP_RAGDOLL,
+    collisionFilterMask: COLLISION_MASK_ALL,
     angularDamping: 0.2,
     linearDamping: 0.08,
     allowSleep: true,
@@ -512,11 +652,12 @@ function buildMannequin(id, origin, colorIndex) {
     const suffix = side < 0 ? 'L' : 'R';
     // Shoulder: broad swing; elbow: flexion plane constrained with a narrow twist range.
     addLimitedJoint(human, 'torso', `upperArm${suffix}`, [side * 0.215, 0.17, 0], [-side * 0.105, 0.19, 0], 1.36, 0.88, [1, 0, 0]);
-    addLimitedJoint(human, `upperArm${suffix}`, `lowerArm${suffix}`, [side * 0.015, -0.195, 0], [-side * 0.015, 0.17, -0.015], 2.17, 0.22, [0, 0, 1]);
-    addLimitedJoint(human, `lowerArm${suffix}`, `hand${suffix}`, [side * 0.005, -0.17, 0], [-side * 0.005, 0.06, -0.01], 0.62, 0.38, [0, 0, 1]);
-    addLimitedJoint(human, 'pelvis', `thigh${suffix}`, [side * 0.125, -0.02, 0], [0, 0.22, 0], 1.18, 0.52, [1, 0, 0]);
-    addLimitedJoint(human, `thigh${suffix}`, `shin${suffix}`, [0, -0.22, 0], [0, 0.205, -0.005], 2.25, 0.16, [1, 0, 0]);
-    addLimitedJoint(human, `shin${suffix}`, `foot${suffix}`, [0, -0.205, 0], [0, 0.035, -0.075], 0.48, 0.24, [1, 0, 0]);
+    // Elbows/knees act like hinges: their lateral axis stays aligned, with flexion only around that axis.
+    addLimitedJoint(human, `upperArm${suffix}`, `lowerArm${suffix}`, [side * 0.015, -0.195, 0], [-side * 0.015, 0.17, -0.015], 0.16, 2.15, [1, 0, 0]);
+    addLimitedJoint(human, `lowerArm${suffix}`, `hand${suffix}`, [side * 0.005, -0.17, 0], [-side * 0.005, 0.06, -0.01], 0.42, 0.46, [1, 0, 0]);
+    addLimitedJoint(human, 'pelvis', `thigh${suffix}`, [side * 0.125, -0.02, 0], [0, 0.22, 0], 1.08, 0.55, [1, 0, 0]);
+    addLimitedJoint(human, `thigh${suffix}`, `shin${suffix}`, [0, -0.22, 0], [0, 0.205, -0.005], 0.14, 2.05, [1, 0, 0]);
+    addLimitedJoint(human, `shin${suffix}`, `foot${suffix}`, [0, -0.205, 0], [0, 0.035, -0.075], 0.34, 0.42, [1, 0, 0]);
   }
   for (const part of human.parts) {
     part.body.addEventListener('collide', (event) => {
@@ -546,6 +687,8 @@ const playerBody = new CANNON.Body({
   mass: 72,
   material: playerPhysicsMaterial,
   position: playerStart.clone(),
+  collisionFilterGroup: COLLISION_GROUP_PLAYER,
+  collisionFilterMask: COLLISION_MASK_ALL & ~COLLISION_GROUP_PLAYER,
   fixedRotation: true,
   linearDamping: 0.02,
   angularDamping: 1,
@@ -560,40 +703,83 @@ playerBody.addEventListener('collide', (event) => {
   const body = event.body;
   if (!body?.gameMeta || !['prop', 'mannequin'].includes(body.gameMeta.kind)) return;
   const impact = event.contact ? Math.abs(event.contact.getImpactVelocityAlongNormal()) : body.velocity.length();
-  if (impact > 3.5) receiveDamage(Math.min(15, Math.round(impact * 1.45)));
+  if (impact > 3.5) receiveDamage(Math.min(15, Math.round(impact * 1.45)), classifyPlayerHit(event.contact));
 });
 
 const handGroup = new THREE.Group();
 camera.add(handGroup);
 const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x536764, roughness: 0.82, metalness: 0.05 });
 const cuffMat = new THREE.MeshStandardMaterial({ color: 0x283a3a, roughness: 0.74, metalness: 0.1 });
-const gloveMat = new THREE.MeshStandardMaterial({ color: 0xa2aaa0, roughness: 0.7, metalness: 0.05 });
-const gloveDark = new THREE.MeshStandardMaterial({ color: 0x66736f, roughness: 0.72 });
+const gloveMat = new THREE.MeshStandardMaterial({ color: 0x46544b, roughness: 0.88, metalness: 0.03 });
+const gloveEdge = new THREE.MeshStandardMaterial({ color: 0x29352f, roughness: 0.82, metalness: 0.05 });
+const glovePad = new THREE.MeshStandardMaterial({ color: 0x657168, roughness: 0.84, metalness: 0.02 });
+const fingerRigs = [];
+let handPose = 0;
+let handTargetPose = 0;
+function setHandPose(value) { handTargetPose = value; }
 function buildHand(side) {
   const group = new THREE.Group();
   const mirrored = side < 0 ? -1 : 1;
-  const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.4, 3, 9), sleeveMat);
-  forearm.rotation.z = mirrored * 0.42;
-  forearm.position.set(-mirrored * 0.045, -0.05, 0);
+  const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.078, 0.42, 4, 10), sleeveMat);
+  forearm.rotation.z = mirrored * 0.4;
+  forearm.position.set(-mirrored * 0.045, -0.06, 0);
   group.add(forearm);
-  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.085, 0.09, 10), cuffMat);
-  cuff.position.set(mirrored * 0.055, 0.19, 0);
-  cuff.rotation.z = mirrored * 0.42;
+  const sleeveBand = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.012, 6, 14), gloveEdge);
+  sleeveBand.position.set(mirrored * 0.055, 0.16, 0);
+  sleeveBand.rotation.x = Math.PI / 2;
+  sleeveBand.rotation.z = mirrored * 0.4;
+  group.add(sleeveBand);
+  const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.078, 0.075, 12), cuffMat);
+  cuff.position.set(mirrored * 0.095, 0.2, 0);
+  cuff.rotation.z = mirrored * 0.4;
   group.add(cuff);
-  const palm = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.14, 0.075), gloveMat);
-  palm.position.set(mirrored * 0.14, 0.28, -0.015);
+
+  const palm = new THREE.Group();
+  palm.position.set(mirrored * 0.15, 0.285, -0.01);
   palm.rotation.z = -mirrored * 0.08;
   group.add(palm);
+  const palmShape = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), gloveMat);
+  palmShape.scale.set(0.077, 0.105, 0.048);
+  palm.add(palmShape);
+  const backPlate = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), glovePad);
+  backPlate.scale.set(0.055, 0.052, 0.014);
+  backPlate.position.set(0, 0.018, 0.043);
+  palm.add(backPlate);
+  const wristInset = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.025, 0.012), gloveEdge);
+  wristInset.position.set(0, -0.069, 0.038);
+  palm.add(wristInset);
+
   for (let i = 0; i < 4; i++) {
-    const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.075, 2, 6), gloveMat);
-    finger.position.set(mirrored * (0.095 + i * 0.03), 0.39 + (i === 0 || i === 3 ? -0.014 : 0), -0.026);
-    finger.rotation.z = -mirrored * 0.06;
-    group.add(finger);
+    const finger = new THREE.Group();
+    finger.position.set((i - 1.5) * 0.034, 0.078 + (i === 0 || i === 3 ? -0.009 : 0), 0.002);
+    palm.add(finger);
+    const length = i === 1 || i === 2 ? 0.055 : 0.047;
+    const proximal = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, length, 3, 8), gloveMat);
+    proximal.position.y = length * 0.48;
+    finger.add(proximal);
+    const knuckle = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), glovePad);
+    knuckle.position.y = length * 0.91;
+    finger.add(knuckle);
+    const distal = new THREE.Group();
+    distal.position.y = length * 0.9;
+    finger.add(distal);
+    const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, length * 0.58, 3, 8), gloveMat);
+    tip.position.y = length * 0.27;
+    distal.add(tip);
+    fingerRigs.push({ base: finger, distal, fan: (i - 1.5) * 0.045, side: mirrored });
   }
-  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.021, 0.07, 2, 6), gloveDark);
-  thumb.position.set(mirrored * 0.205, 0.285, -0.005);
-  thumb.rotation.z = -mirrored * 0.68;
-  group.add(thumb);
+  const thumb = new THREE.Group();
+  thumb.position.set(mirrored * 0.066, -0.004, 0.008);
+  thumb.rotation.z = -mirrored * 0.63;
+  palm.add(thumb);
+  const thumbBase = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.045, 3, 8), gloveMat);
+  thumbBase.position.y = 0.03;
+  thumb.add(thumbBase);
+  const thumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.034, 3, 8), glovePad);
+  thumbTip.position.set(mirrored * 0.012, 0.072, 0.003);
+  thumb.add(thumbTip);
+  fingerRigs.push({ base: thumb, distal: null, fan: 0.5, side: mirrored, thumb: true });
+
   group.position.set(side * 0.39, -0.64, -0.77);
   group.rotation.z = -side * 0.05;
   group.traverse((object) => { if (object.isMesh) { object.castShadow = false; object.receiveShadow = false; } });
@@ -601,6 +787,19 @@ function buildHand(side) {
 }
 buildHand(-1);
 buildHand(1);
+function updateHandPose(dt) {
+  handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
+  for (const rig of fingerRigs) {
+    if (rig.thumb) {
+      rig.base.rotation.x = handPose * 0.48;
+      rig.base.rotation.z = -rig.side * (0.63 + handPose * 0.32);
+    } else {
+      rig.base.rotation.x = handPose * 0.92;
+      rig.base.rotation.z = rig.fan * (0.25 + handPose * 0.45);
+      rig.distal.rotation.x = handPose * 0.85;
+    }
+  }
+}
 
 let yaw = 0;
 let pitch = 0;
@@ -613,6 +812,15 @@ let walkPhase = 0;
 let shakeAmount = 0;
 let damageCooldown = 0;
 let health = 100;
+let hunger = 100;
+let hungerDamageTimer = 0;
+let inventoryOpen = false;
+let inventoryItems = [];
+let inventorySequence = 0;
+const INVENTORY_COLUMNS = 8;
+const INVENTORY_ROWS = 5;
+const INVENTORY_WEIGHT_LIMIT = 30;
+let injuryLevels = { head: 0, neck: 0, torso: 0, 'arm-left': 0, 'arm-right': 0, 'leg-left': 0, 'leg-right': 0 };
 let toastTimer = 0;
 let targetRefresh = 0;
 let elapsed = 0;
@@ -620,14 +828,12 @@ let frameCount = 0;
 let fpsTime = 0;
 let fpsValue = 60;
 let qualityReduced = false;
-let jumpQueued = false;
 const keys = new Set();
 const raycaster = new THREE.Raycaster();
 raycaster.far = 5;
 const lookVector = new THREE.Vector3();
 const heldWorldTarget = new THREE.Vector3();
 const heldWorldOffset = new THREE.Vector3();
-const moveVector = new CANNON.Vec3();
 
 function toast(text, duration = 1.45) {
   const element = $('toast');
@@ -636,22 +842,68 @@ function toast(text, duration = 1.45) {
   toastTimer = duration;
 }
 
-function receiveDamage(amount) {
+const injuryElementIds = {
+  head: 'injury-head', neck: 'injury-neck', torso: 'injury-torso',
+  'arm-left': 'injury-arm-left', 'arm-right': 'injury-arm-right',
+  'leg-left': 'injury-leg-left', 'leg-right': 'injury-leg-right'
+};
+
+function updateHealthHUD() {
+  $('health-value').textContent = String(health);
+  $('health-bar').style.width = `${health}%`;
+  $('health-bar').style.background = health < 35 ? '#d95c50' : health < 70 ? '#c3a66d' : '#9ab779';
+}
+
+function updateHungerHUD() {
+  $('hunger-value').textContent = String(Math.round(hunger));
+  $('hunger-bar').style.width = `${hunger}%`;
+  $('hunger-bar').style.background = hunger < 25 ? '#dc7950' : '#c4a66e';
+}
+
+function classifyPlayerHit(contact) {
+  if (!contact) return 'torso';
+  const offset = contact.bi === playerBody ? contact.ri : contact.rj;
+  if (!offset) return 'torso';
+  if (offset.y > 0.7) return 'head';
+  if (offset.y > 0.36) return 'neck';
+  if (offset.y < -0.25) return offset.x < 0 ? 'leg-left' : 'leg-right';
+  if (Math.abs(offset.x) > 0.2) return offset.x < 0 ? 'arm-left' : 'arm-right';
+  return 'torso';
+}
+
+function applyBodyInjury(part, amount) {
+  const element = $(injuryElementIds[part] || 'injury-torso');
+  injuryLevels[part] = Math.min(1, (injuryLevels[part] || 0) + Math.max(0.28, amount / 24));
+  element.classList.add('injured');
+  element.style.opacity = String(0.55 + injuryLevels[part] * 0.45);
+  const label = part === 'head' ? 'ГОЛОВА' : part === 'neck' ? 'ШЕЯ' : part === 'torso' ? 'КОРПУС' : part.startsWith('arm') ? (part.endsWith('left') ? 'ЛЕВАЯ РУКА' : 'ПРАВАЯ РУКА') : (part.endsWith('left') ? 'ЛЕВАЯ НОГА' : 'ПРАВАЯ НОГА');
+  $('injury-status').textContent = `ТРАВМА · ${label}`;
+  $('injury-status').classList.add('alert');
+}
+
+function receiveDamage(amount, part = 'torso') {
   if (damageCooldown > 0 || !started) return;
   damageCooldown = 0.72;
   health = Math.max(0, health - amount);
   shakeAmount = Math.min(1.4, shakeAmount + 0.85);
-  $('health-value').textContent = String(health);
-  $('health-bar').style.width = `${health}%`;
-  const low = health < 35;
-  $('health-bar').style.background = low ? '#e37763' : '#82c7a6';
-  $('health-label').textContent = low ? 'ПОВРЕЖДЕНИЕ' : health < 70 ? 'ВНИМАНИЕ' : 'НОРМА';
-  $('health-label').style.color = low ? '#ed9583' : health < 70 ? '#e7bd79' : '#a8d3bf';
+  updateHealthHUD();
+  applyBodyInjury(part, amount);
   document.body.classList.add('damage-flash');
   setTimeout(() => document.body.classList.remove('damage-flash'), 170);
   toast(`УДАР · −${amount}%`, 0.9);
-  if (health === 0) {
-    toast('ОПЕРАТОР ВЫВЕДЕН · НАЖМИТЕ ↻', 2.5);
+  if (health === 0) toast('ОПЕРАТОР ВЫВЕДЕН · НАЖМИТЕ ↻', 2.5);
+}
+
+function updateNeeds(dt) {
+  if (!started || inventoryOpen) return;
+  hunger = Math.max(0, hunger - dt * 0.028);
+  updateHungerHUD();
+  if (hunger <= 0) {
+    hungerDamageTimer += dt;
+    if (hungerDamageTimer >= 6) {
+      hungerDamageTimer = 0;
+      receiveDamage(1, 'torso');
+    }
   }
 }
 
@@ -716,7 +968,7 @@ function getTargetMeta() {
   const hits = raycaster.intersectObjects(raycastTargets, true);
   for (const hit of hits) {
     const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-    if (!meta || hit.distance > (meta.range || 4.5)) continue;
+    if (!meta || meta.isStored || hit.distance > (meta.range || 4.5)) continue;
     return { meta, distance: hit.distance, point: hit.point };
   }
   return null;
@@ -728,10 +980,14 @@ function updateTargetUI() {
   const readout = $('target-readout');
   const action = $('action-button');
   const heldTag = $('held-tag');
+  const placeButton = $('place-button');
+  const stashButton = $('stash-button');
   if (heldBody) {
     const meta = heldBody.gameMeta;
     $('held-name').textContent = meta.name;
     heldTag.classList.add('visible');
+    placeButton.classList.add('visible');
+    stashButton.classList.add('visible');
     action.classList.add('is-holding');
     action.classList.remove('has-target');
     $('action-label').textContent = 'БРОСИТЬ';
@@ -741,6 +997,8 @@ function updateTargetUI() {
     return;
   }
   heldTag.classList.remove('visible');
+  placeButton.classList.remove('visible');
+  stashButton.classList.remove('visible');
   action.classList.remove('is-holding');
   if (currentTarget?.meta.kind === 'prop') {
     const meta = currentTarget.meta;
@@ -769,18 +1027,33 @@ function updateTargetUI() {
   }
 }
 
+function suspendPlayerCollision(meta) {
+  const body = meta.body;
+  body.collisionFilterMask = meta.originalCollisionFilterMask & ~COLLISION_GROUP_PLAYER;
+  meta.playerCollisionSuspended = true;
+  meta.playerCollisionReEnableAfter = elapsed + 0.35;
+}
+
 function pickUp(meta) {
   const body = meta.body;
-  if (!body || body.gameMeta?.isHeld) return;
+  if (!body || body.gameMeta?.isHeld || meta.isStored) return;
   heldBody = body;
   body.gameMeta.isHeld = true;
-  body.type = CANNON.Body.KINEMATIC;
-  body.mass = 0;
+  // Keep the item dynamic so the floor/walls still stop it, but remove the player bit from
+  // the mutual collision mask. This is the important GMod-style hand/player separation.
+  body.type = CANNON.Body.DYNAMIC;
+  body.mass = body.gameMeta.initialMass;
+  body.gameMeta.playerCollisionSuspended = false;
+  body.collisionFilterMask = body.gameMeta.originalCollisionFilterMask & ~COLLISION_GROUP_PLAYER;
+  body.linearDamping = 0.82;
+  body.angularDamping = 0.92;
   body.updateMassProperties();
   body.velocity.set(0, 0, 0);
   body.angularVelocity.set(0, 0, 0);
+  body.force.set(0, 0, 0);
   body.wakeUp();
   world.broadphase.dirty = true;
+  setHandPose(1);
   $('held-name').textContent = meta.name;
   toast(`${meta.name} · ${meta.mass.toFixed(1)} КГ`, 1.15);
 }
@@ -792,9 +1065,15 @@ function throwHeld() {
   makeCameraDirection();
   body.type = CANNON.Body.DYNAMIC;
   body.mass = meta.initialMass;
+  suspendPlayerCollision(meta);
+  body.linearDamping = meta.originalLinearDamping;
+  body.angularDamping = meta.originalAngularDamping;
   body.updateMassProperties();
   body.gameMeta.isHeld = false;
-  body.position.set(heldWorldTarget.x, heldWorldTarget.y, heldWorldTarget.z);
+  body.force.set(0, 0, 0);
+  body.updateAABB();
+  const halfHeight = Math.max(0.08, (body.aabb.upperBound.y - body.aabb.lowerBound.y) * 0.5);
+  body.position.y = Math.max(body.position.y, halfHeight + 0.025);
   const weightScale = Math.max(0.34, Math.min(1.15, Math.sqrt(2.8 / meta.initialMass)));
   const forwardSpeed = 9.6 * weightScale;
   body.velocity.set(
@@ -806,11 +1085,181 @@ function throwHeld() {
   body.wakeUp();
   world.broadphase.dirty = true;
   heldBody = null;
+  setHandPose(0);
   toast(`БРОСОК · ${meta.name}`, 0.95);
 }
 
+function dropHeld() {
+  if (!heldBody) return;
+  const body = heldBody;
+  const meta = body.gameMeta;
+  body.type = CANNON.Body.DYNAMIC;
+  body.mass = meta.initialMass;
+  suspendPlayerCollision(meta);
+  body.linearDamping = meta.originalLinearDamping;
+  body.angularDamping = meta.originalAngularDamping;
+  body.force.set(0, 0, 0);
+  body.gameMeta.isHeld = false;
+  body.updateMassProperties();
+  body.updateAABB();
+  const halfHeight = Math.max(0.08, (body.aabb.upperBound.y - body.aabb.lowerBound.y) * 0.5);
+  body.position.y = Math.max(body.position.y, halfHeight + 0.025);
+  body.velocity.set(playerBody.velocity.x * 0.45, -0.18, playerBody.velocity.z * 0.45);
+  body.angularVelocity.set(0, 0, 0);
+  body.wakeUp();
+  world.broadphase.dirty = true;
+  heldBody = null;
+  setHandPose(0);
+  toast(`ПОЛОЖЕНО · ${meta.name}`, 0.95);
+}
+
+function inventoryWeight() {
+  return inventoryItems.reduce((total, item) => total + item.meta.mass, 0);
+}
+
+function findInventorySlot(width, height) {
+  for (let y = 0; y <= INVENTORY_ROWS - height; y++) {
+    for (let x = 0; x <= INVENTORY_COLUMNS - width; x++) {
+      const overlaps = inventoryItems.some((item) =>
+        x < item.x + item.width && x + width > item.x &&
+        y < item.y + item.height && y + height > item.y
+      );
+      if (!overlaps) return { x, y };
+    }
+  }
+  return null;
+}
+
+function updateInventoryUI() {
+  const grid = $('inventory-grid');
+  grid.replaceChildren();
+  for (let i = 0; i < INVENTORY_COLUMNS * INVENTORY_ROWS; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'inventory-cell';
+    cell.setAttribute('aria-hidden', 'true');
+    grid.appendChild(cell);
+  }
+  for (const item of inventoryItems) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'inventory-item';
+    button.style.gridColumn = `${item.x + 1} / span ${item.width}`;
+    button.style.gridRow = `${item.y + 1} / span ${item.height}`;
+    button.title = `${item.meta.name} · ${item.meta.mass.toFixed(1)} кг. Нажмите, чтобы взять.`;
+    const top = document.createElement('span');
+    top.className = 'inventory-item-top';
+    const icon = document.createElement('b');
+    icon.className = 'inventory-item-icon';
+    icon.textContent = item.meta.inventoryIcon || '▣';
+    const weight = document.createElement('small');
+    weight.className = 'inventory-item-weight';
+    weight.textContent = `${item.meta.mass.toFixed(1)} кг`;
+    top.append(icon, weight);
+    const name = document.createElement('span');
+    name.className = 'inventory-item-name';
+    name.textContent = item.meta.name;
+    button.append(top, name);
+    button.addEventListener('click', () => takeInventoryItem(item.id));
+    grid.appendChild(button);
+  }
+  const total = inventoryWeight();
+  $('inventory-weight').textContent = total.toFixed(1);
+  $('inventory-limit').textContent = INVENTORY_WEIGHT_LIMIT.toFixed(1);
+  $('inventory-weight-bar').style.width = `${Math.min(100, total / INVENTORY_WEIGHT_LIMIT * 100)}%`;
+  $('inventory-weight-bar').style.background = total / INVENTORY_WEIGHT_LIMIT > 0.82 ? '#d08353' : '#a4c17e';
+  $('inventory-empty').style.display = inventoryItems.length ? 'none' : 'flex';
+  $('inventory-message').innerHTML = inventoryItems.length
+    ? 'Коснитесь предмета,<br>чтобы взять его в руки.'
+    : 'Ячейки 8 × 5<br>Сложите предмет в рюкзак кнопкой «В РЮКЗАК».';
+}
+
+function setInventoryOpen(open) {
+  if (open && !started) return;
+  inventoryOpen = open;
+  const overlay = $('inventory-overlay');
+  overlay.classList.toggle('open', open);
+  overlay.setAttribute('aria-hidden', String(!open));
+  if (open) {
+    resetJoystick();
+    if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+    updateInventoryUI();
+  } else {
+    keys.clear();
+  }
+}
+
+function storeHeldInInventory() {
+  if (!heldBody) return;
+  const body = heldBody;
+  const meta = body.gameMeta;
+  const width = meta.inventoryWidth || 2;
+  const height = meta.inventoryHeight || 2;
+  const nextWeight = inventoryWeight() + meta.mass;
+  if (nextWeight > INVENTORY_WEIGHT_LIMIT + 1e-6) {
+    toast(`ПРЕВЫШЕН ЛИМИТ · ${INVENTORY_WEIGHT_LIMIT} КГ`, 1.15);
+    $('inventory-message').textContent = 'Слишком тяжело: освободите место или выберите предмет легче.';
+    return;
+  }
+  const slot = findInventorySlot(width, height);
+  if (!slot) {
+    toast('НЕТ СВОБОДНЫХ ЯЧЕЕК', 1.0);
+    return;
+  }
+  const record = physicsRecords.find((candidate) => candidate.body === body);
+  if (!record) return;
+  body.gameMeta.isHeld = false;
+  body.gameMeta.isStored = true;
+  body.gameMeta.playerCollisionSuspended = false;
+  body.collisionFilterMask = meta.originalCollisionFilterMask;
+  body.linearDamping = meta.originalLinearDamping;
+  body.angularDamping = meta.originalAngularDamping;
+  body.force.set(0, 0, 0);
+  body.velocity.set(0, 0, 0);
+  body.angularVelocity.set(0, 0, 0);
+  world.removeBody(body);
+  scene.remove(record.visual);
+  heldBody = null;
+  setHandPose(0);
+  inventoryItems.push({
+    id: `bag-${++inventorySequence}`,
+    meta, body, visual: record.visual,
+    x: slot.x, y: slot.y, width, height
+  });
+  updateInventoryUI();
+  updateTargetUI();
+  toast(`В РЮКЗАКЕ · ${meta.name}`, 1.0);
+  setInventoryOpen(true);
+}
+
+function takeInventoryItem(id) {
+  if (heldBody) {
+    toast('СНАЧАЛА ПОЛОЖИТЕ УДЕРЖИВАЕМЫЙ ПРЕДМЕТ', 1.0);
+    return;
+  }
+  const index = inventoryItems.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  const [item] = inventoryItems.splice(index, 1);
+  const { body, visual, meta } = item;
+  meta.isStored = false;
+  body.type = CANNON.Body.DYNAMIC;
+  body.mass = meta.initialMass;
+  body.collisionFilterMask = meta.originalCollisionFilterMask;
+  body.linearDamping = meta.originalLinearDamping;
+  body.angularDamping = meta.originalAngularDamping;
+  body.force.set(0, 0, 0);
+  body.velocity.set(0, 0, 0);
+  body.angularVelocity.set(0, 0, 0);
+  body.updateMassProperties();
+  scene.add(visual);
+  world.addBody(body);
+  world.broadphase.dirty = true;
+  setInventoryOpen(false);
+  pickUp(meta);
+  updateInventoryUI();
+}
+
 function doAction() {
-  if (!started) { startGame(); return; }
+  if (!started || inventoryOpen) { if (!started) startGame(); return; }
   if (heldBody) { throwHeld(); return; }
   const target = currentTarget || getTargetMeta();
   if (!target) {
@@ -835,38 +1284,45 @@ function updateHeld(dt) {
   heldWorldTarget.add(heldWorldOffset);
   heldWorldTarget.y -= 0.11;
   const body = heldBody;
-  const maxVelocity = 16;
+  body.updateAABB();
+  const halfHeight = Math.max(0.08, (body.aabb.upperBound.y - body.aabb.lowerBound.y) * 0.5);
+  heldWorldTarget.y = THREE.MathUtils.clamp(heldWorldTarget.y, halfHeight + 0.025, 5.4 - halfHeight);
+  const weightScale = Math.sqrt(2.8 / body.gameMeta.initialMass);
+  const maxVelocity = THREE.MathUtils.clamp(7.5 * weightScale, 3.0, 9.0);
+  const followGain = THREE.MathUtils.clamp(13 * weightScale, 5.0, 18.0);
   body.velocity.set(
-    THREE.MathUtils.clamp((heldWorldTarget.x - body.position.x) * 18, -maxVelocity, maxVelocity),
-    THREE.MathUtils.clamp((heldWorldTarget.y - body.position.y) * 18, -maxVelocity, maxVelocity),
-    THREE.MathUtils.clamp((heldWorldTarget.z - body.position.z) * 18, -maxVelocity, maxVelocity)
+    THREE.MathUtils.clamp((heldWorldTarget.x - body.position.x) * followGain, -maxVelocity, maxVelocity),
+    THREE.MathUtils.clamp((heldWorldTarget.y - body.position.y) * followGain, -maxVelocity, maxVelocity),
+    THREE.MathUtils.clamp((heldWorldTarget.z - body.position.z) * followGain, -maxVelocity, maxVelocity)
   );
+  body.angularVelocity.set(0, 0, 0);
+  // Cancel gravity while hand-held; discrete floor/wall contacts remain enabled.
+  body.force.set(0, body.mass * 9.82, 0);
+  body.wakeUp();
   body.aabbNeedsUpdate = true;
 }
 
 function isMovementKeyDown() {
-  return keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12;
+  return !inventoryOpen && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12);
 }
 
 function updatePlayer(dt) {
-  let strafe = joystick.x;
-  let forward = -joystick.y;
-  if (keys.has('KeyA')) strafe -= 1;
-  if (keys.has('KeyD')) strafe += 1;
-  if (keys.has('KeyW')) forward += 1;
-  if (keys.has('KeyS')) forward -= 1;
+  let strafe = inventoryOpen ? 0 : joystick.x;
+  let forward = inventoryOpen ? 0 : -joystick.y;
+  if (!inventoryOpen) {
+    if (keys.has('KeyA')) strafe -= 1;
+    if (keys.has('KeyD')) strafe += 1;
+    if (keys.has('KeyW')) forward += 1;
+    if (keys.has('KeyS')) forward -= 1;
+  }
   const length = Math.hypot(strafe, forward);
   if (length > 1) { strafe /= length; forward /= length; }
-  const speed = (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 5.25 : 3.8;
+  const speed = !inventoryOpen && (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 5.25 : 3.8;
   const dx = -Math.sin(yaw) * forward + Math.cos(yaw) * strafe;
   const dz = -Math.cos(yaw) * forward - Math.sin(yaw) * strafe;
   const smoothing = Math.min(1, dt * (length > 0.02 ? 13 : 17));
   playerBody.velocity.x += (dx * speed - playerBody.velocity.x) * smoothing;
   playerBody.velocity.z += (dz * speed - playerBody.velocity.z) * smoothing;
-  if (jumpQueued && playerBody.position.y < 0.92) {
-    playerBody.velocity.y = 4.25;
-    jumpQueued = false;
-  }
   if (length > 0.02) walkPhase += dt * (speed + 1.6);
 }
 
@@ -882,6 +1338,55 @@ function updateCamera(dt) {
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
   handGroup.position.y = moving ? Math.sin(walkPhase * 2.0 + 0.75) * 0.012 : 0;
   handGroup.position.x = moving ? Math.sin(walkPhase) * 0.008 : 0;
+}
+
+function keepPlayerInBounds() {
+  const safeX = 8.45;
+  const safeZ = 6.45;
+  if (![playerBody.position.x, playerBody.position.y, playerBody.position.z].every(Number.isFinite) || playerBody.position.y < 0.48) {
+    playerBody.position.copy(playerStart);
+    playerBody.previousPosition.copy(playerStart);
+    playerBody.interpolatedPosition.copy(playerStart);
+    playerBody.velocity.set(0, 0, 0);
+    playerBody.force.set(0, 0, 0);
+    playerBody.aabbNeedsUpdate = true;
+    world.broadphase.dirty = true;
+    playerBody.wakeUp();
+    receiveDamage(18, 'leg-left');
+    toast('ВОЗВРАТ В СЕКТОР · ПАДЕНИЕ', 1.4);
+    return;
+  }
+  if (playerBody.position.x < -safeX || playerBody.position.x > safeX) {
+    playerBody.position.x = THREE.MathUtils.clamp(playerBody.position.x, -safeX, safeX);
+    if (Math.sign(playerBody.velocity.x) === Math.sign(playerBody.position.x)) playerBody.velocity.x = 0;
+  }
+  if (playerBody.position.z < -safeZ || playerBody.position.z > safeZ) {
+    playerBody.position.z = THREE.MathUtils.clamp(playerBody.position.z, -safeZ, safeZ);
+    if (Math.sign(playerBody.velocity.z) === Math.sign(playerBody.position.z)) playerBody.velocity.z = 0;
+  }
+  if (playerBody.position.y > 5.02) {
+    playerBody.position.y = 5.02;
+    if (playerBody.velocity.y > 0) playerBody.velocity.y = 0;
+  }
+  playerBody.aabbNeedsUpdate = true;
+}
+
+function updatePlayerCollisionMasks() {
+  let changed = false;
+  for (const record of physicsRecords) {
+    const meta = record.body.gameMeta;
+    if (!meta?.playerCollisionSuspended || meta.isHeld || meta.isStored || elapsed < (meta.playerCollisionReEnableAfter || 0)) continue;
+    const radius = Math.max(0.34, record.body.boundingRadius || 0.5);
+    const dx = record.body.position.x - playerBody.position.x;
+    const dz = record.body.position.z - playerBody.position.z;
+    const dy = Math.abs(record.body.position.y - playerBody.position.y);
+    if (Math.hypot(dx, dz) > radius + 0.36 || dy > radius + 0.9) {
+      record.body.collisionFilterMask = meta.originalCollisionFilterMask;
+      meta.playerCollisionSuspended = false;
+      changed = true;
+    }
+  }
+  if (changed) world.broadphase.dirty = true;
 }
 
 function syncVisuals() {
@@ -916,6 +1421,7 @@ function animate(time) {
   }
   updatePlayer(dt);
   updateCamera(dt);
+  updateHandPose(dt);
   updateHeld(dt);
   for (const record of physicsRecords) {
     const last = record.body.gameMeta?.lastVelocity;
@@ -926,6 +1432,9 @@ function animate(time) {
     }
   }
   world.step(1 / 60, dt, 4);
+  keepPlayerInBounds();
+  updatePlayerCollisionMasks();
+  updateNeeds(dt);
   syncVisuals();
   updateMannequinCountAndFlash(dt);
   targetRefresh += dt;
@@ -979,7 +1488,7 @@ joystickRoot.addEventListener('pointerup', (event) => { if (event.pointerId === 
 joystickRoot.addEventListener('pointercancel', resetJoystick);
 
 function beginLook(event) {
-  if (!started || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
+  if (!started || inventoryOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
   if (event.target.closest('button, #joystick, #intro, .target-readout')) return;
   if (event.pointerType === 'mouse' && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
     try { canvas.requestPointerLock(); } catch (_) { /* Non-essential for browser testing. */ }
@@ -1006,17 +1515,34 @@ window.addEventListener('pointerup', (event) => { if (lookState?.pointerId === e
 window.addEventListener('pointercancel', () => { lookState = null; }, { passive: true });
 
 $('action-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); doAction(); });
+$('place-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); dropHeld(); });
+$('stash-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); storeHeldInInventory(); });
+$('inventory-button').addEventListener('click', () => setInventoryOpen(!inventoryOpen));
+$('inventory-close').addEventListener('click', () => setInventoryOpen(false));
+$('inventory-overlay').addEventListener('click', (event) => { if (event.target === $('inventory-overlay')) setInventoryOpen(false); });
 $('start-button').addEventListener('click', startGame);
 $('reset-button').addEventListener('click', () => window.location.reload());
 document.addEventListener('keydown', (event) => {
-  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'Space', 'KeyE', 'KeyR'].includes(event.code)) event.preventDefault();
+  if (event.code === 'Tab') {
+    event.preventDefault();
+    if (started) setInventoryOpen(!inventoryOpen);
+    return;
+  }
+  if (event.code === 'Escape' && inventoryOpen) {
+    event.preventDefault();
+    setInventoryOpen(false);
+    return;
+  }
+  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyR'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
-  if (event.code === 'KeyE' && !event.repeat) doAction();
+  if (event.code === 'KeyE' && !event.repeat && !inventoryOpen) doAction();
   if (event.code === 'KeyR' && !event.repeat) window.location.reload();
-  if (event.code === 'Space' && !event.repeat) jumpQueued = true;
 });
 document.addEventListener('keyup', (event) => keys.delete(event.code));
 document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); lookState = null; } });
 
 updateRagdollCount();
+updateHealthHUD();
+updateHungerHUD();
+updateInventoryUI();
 updateTargetUI();
