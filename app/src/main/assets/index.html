@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#11191d">
+  <title>ПОЛИГОН 01</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game" aria-label="3D полигон"></canvas>
+  <div id="camera-touch" aria-hidden="true"></div>
+  <div class="vignette"></div>
+  <div class="scanlines"></div>
+
+  <header class="hud-top">
+    <div class="brand-lockup">
+      <div class="brand-mark"><span></span><span></span><span></span><span></span></div>
+      <div>
+        <div class="brand-name">POLYGON <b>01</b></div>
+        <div class="brand-sub">ТЕСТОВЫЙ ПОЛИГОН</div>
+      </div>
+    </div>
+    <div class="offline-pill"><span class="offline-dot"></span> ОФЛАЙН · ЛОКАЛЬНАЯ СИМУЛЯЦИЯ</div>
+    <div class="top-right">
+      <div class="sector-readout"><span>СЕКТОР</span><b>БЕТОННАЯ КАМЕРА</b></div>
+      <button id="reset-button" class="icon-button" aria-label="Сбросить испытание" title="Сбросить испытание">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="telemetry" aria-label="Показания">
+    <div class="telemetry-row"><span class="telemetry-icon pulse-icon"></span><span>СОСТОЯНИЕ</span><b id="health-label">НОРМА</b></div>
+    <div class="health-track"><i id="health-bar"></i></div>
+    <div class="telemetry-foot"><span>ОПЕРАТОР</span><strong id="health-value">100</strong><span class="unit">%</span></div>
+  </section>
+
+  <div class="center-reticle" id="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
+  <div class="target-readout" id="target-readout">
+    <span class="target-mark"></span>
+    <span><b id="target-name">СВОБОДНО</b><small id="target-detail">Наведите на предмет</small></span>
+  </div>
+  <div id="toast" class="toast"></div>
+  <div id="held-tag" class="held-tag"><span class="held-dot"></span><span id="held-name">ПРЕДМЕТ ВЗЯТ</span><small>ФИЗИЧЕСКОЕ УДЕРЖАНИЕ</small></div>
+
+  <div class="controls-hint" id="controls-hint"><kbd>W A S D</kbd><span>ДВИЖЕНИЕ</span><i></i><kbd>МЫШЬ</kbd><span>ОБЗОР</span><i></i><kbd>E</kbd><span>ДЕЙСТВИЕ</span></div>
+
+  <div id="joystick" class="joystick" aria-label="Виртуальный джойстик">
+    <div class="joystick-ring"><div id="joystick-knob" class="joystick-knob"><span></span></div></div>
+    <div class="joystick-caption">ДВИЖЕНИЕ</div>
+  </div>
+
+  <button id="action-button" class="action-button" aria-label="Действие">
+    <span class="action-halo"></span>
+    <span class="action-icon" id="action-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
+    <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b><small id="action-subtitle">ВЫБЕРИТЕ ЦЕЛЬ</small></span>
+  </button>
+
+  <div class="bottom-status"><span class="status-led"></span> ФИЗИЧЕСКИЙ ДВИЖОК <b>АКТИВЕН</b><i></i><span>РАГДОЛЛЫ</span><b id="ragdoll-count">0 / 2</b></div>
+
+  <div id="rotate-hint" class="rotate-hint"><div class="rotate-icon">↻</div><b>ПОВЕРНИТЕ УСТРОЙСТВО</b><span>Игра работает в горизонтальном режиме</span></div>
+
+  <div id="intro" class="intro-screen">
+    <div class="intro-grid"></div>
+    <div class="intro-panel">
+      <div class="intro-overline"><span></span> ИСПЫТАТЕЛЬНАЯ СИСТЕМА · 01</div>
+      <div class="intro-title">POLYGON<span>01</span></div>
+      <div class="intro-rule"><i></i></div>
+      <p>ФИЗИЧЕСКИЙ ПОЛИГОН</p>
+      <div class="intro-copy">Бетонная камера. Свободная физика.<br>Проверьте каждый предмет на прочность.</div>
+      <button id="start-button" class="start-button"><span>НАЧАТЬ ИСПЫТАНИЕ</span><b>↗</b></button>
+      <div class="intro-footer"><span>ОФЛАЙН РЕЖИМ</span><i></i><span>БЕЗ СЮЖЕТА · ТОЛЬКО ФИЗИКА</span></div>
+    </div>
+    <div class="intro-version">ANDROID BUILD <span>1.0</span></div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
