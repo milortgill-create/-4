@@ -4,34 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#11191d">
-  <title>ПОЛИГОН 01</title>
+  <title>Полигон</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <canvas id="game" aria-label="3D полигон"></canvas>
+  <canvas id="game" aria-label="Игровая сцена"></canvas>
   <div id="camera-touch" aria-hidden="true"></div>
   <div class="vignette"></div>
   <div class="scanlines"></div>
-
-  <header class="hud-top">
-    <div class="brand-lockup">
-      <div class="brand-mark"><span></span><span></span><span></span><span></span></div>
-      <div>
-        <div class="brand-name">POLYGON <b>01</b></div>
-        <div class="brand-sub">ТЕСТОВЫЙ ПОЛИГОН</div>
-      </div>
-    </div>
-    <div class="offline-pill"><span class="offline-dot"></span> ОФЛАЙН · ЛОКАЛЬНАЯ СИМУЛЯЦИЯ</div>
-    <div class="top-right">
-      <div class="sector-readout"><span>СЕКТОР</span><b>БЕТОННАЯ КАМЕРА</b></div>
-      <button id="inventory-button" class="icon-button" aria-label="Открыть рюкзак" title="Рюкзак · Tab">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V5.8A2.8 2.8 0 0 1 10.8 3h2.4A2.8 2.8 0 0 1 16 5.8V7M6 7h12l1.5 13h-15L6 7Z"/><path d="M9 11v2M15 11v2M8 7a4 4 0 0 0 8 0"/></svg>
-      </button>
-      <button id="reset-button" class="icon-button" aria-label="Сбросить испытание" title="Сбросить испытание">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>
-      </button>
-    </div>
-  </header>
 
   <section class="vitals-panel" aria-label="Здоровье и состояние тела">
     <svg class="injury-doll" id="injury-doll" viewBox="0 0 82 142" role="group" aria-label="Интерактивная схема травм">
@@ -64,107 +44,72 @@
         <div class="vital-heading"><span>ЖАЖДА</span><b><strong id="thirst-value">100</strong><small>%</small></b></div>
         <div class="vital-track thirst-track"><i id="thirst-bar"></i></div>
       </div>
-      <div id="injury-status" class="injury-status">ТРАВМ НЕТ · НАЖМИТЕ НА СХЕМУ</div>
+      <div id="injury-status" class="injury-status">НЕТ ТРАВМ</div>
     </div>
   </section>
 
-  <div class="center-reticle" id="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
-  <div class="target-readout" id="target-readout">
-    <span class="target-mark"></span>
-    <span><b id="target-name">СВОБОДНО</b><small id="target-detail">Наведите на предмет</small></span>
-  </div>
-  <div id="toast" class="toast"></div>
-  <div id="held-tag" class="held-tag"><span class="held-dot"></span><span id="held-name">ПРЕДМЕТ ВЗЯТ</span><small>ФИЗИЧЕСКОЕ УДЕРЖАНИЕ</small></div>
-
-  <div class="controls-hint" id="controls-hint"><kbd>W A S D</kbd><span>ДВИЖЕНИЕ</span><i></i><kbd>МЫШЬ</kbd><span>ОБЗОР</span><i></i><kbd>E</kbd><span>ДЕЙСТВИЕ</span><i></i><kbd>TAB</kbd><span>РЮКЗАК</span></div>
-
-  <div id="joystick" class="joystick" aria-label="Виртуальный джойстик">
+  <div id="joystick" class="joystick" aria-label="Джойстик">
     <div class="joystick-ring"><div id="joystick-knob" class="joystick-knob"><span></span></div></div>
-    <div class="joystick-caption">ДВИЖЕНИЕ</div>
   </div>
 
-  <button id="action-button" class="action-button" aria-label="Действие">
+  <button id="action-button" class="action-button" aria-label="Действие" aria-description="Коснитесь для действия. Удерживайте, чтобы открыть рюкзак.">
     <span class="action-halo"></span>
-    <span class="action-icon" id="action-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
-    <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b><small id="action-subtitle">ВЫБЕРИТЕ ЦЕЛЬ</small></span>
+    <span class="action-icon" id="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
+    <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b></span>
   </button>
-  <button id="stash-button" class="place-button stash-button" aria-label="Убрать предмет в рюкзак">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7V5.8A2.8 2.8 0 0 1 10.8 3h2.4A2.8 2.8 0 0 1 16 5.8V7M6 7h12l1.5 13h-15L6 7Z"/><path d="M12 10v6m-3-3h6"/></svg>
-    <span>В РЮКЗАК</span>
-  </button>
-  <button id="place-button" class="place-button" aria-label="Положить предмет">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>
-    <span>ПОЛОЖИТЬ</span>
-  </button>
-
-  <div class="bottom-status"><span class="status-led"></span> ФИЗИЧЕСКИЙ ДВИЖОК <b>АКТИВЕН</b><i></i><span>РАГДОЛЛЫ</span><b id="ragdoll-count">0 / 2</b></div>
-
-  <div id="rotate-hint" class="rotate-hint"><div class="rotate-icon">↻</div><b>ПОВЕРНИТЕ УСТРОЙСТВО</b><span>Игра работает в горизонтальном режиме</span></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <div id="inventory-overlay" class="inventory-overlay" aria-hidden="true">
     <section class="inventory-panel" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
       <header class="inventory-header">
-        <div><span class="inventory-kicker">СНАРЯЖЕНИЕ ОПЕРАТОРА</span><h2 id="inventory-title">РЮКЗАК <small>01</small></h2></div>
+        <div><span class="inventory-kicker">СНАРЯЖЕНИЕ</span><h2 id="inventory-title">РЮКЗАК</h2></div>
         <button id="inventory-close" class="inventory-close" aria-label="Закрыть рюкзак">×</button>
       </header>
       <div class="inventory-body">
         <aside class="inventory-character" aria-label="Модель персонажа">
-          <div class="inventory-column-heading"><span>ОПЕРАТОР</span><b>01</b></div>
+          <div class="inventory-column-heading"><span>ПЕРСОНАЖ</span></div>
           <div id="inventory-preview-frame" class="inventory-preview-frame">
-            <canvas id="inventory-preview-canvas" aria-label="Вращающаяся 3D-модель оператора"></canvas>
-            <div id="inventory-preview-fallback" class="inventory-preview-fallback" aria-hidden="true">ОПЕРАТОР<br><span>ЭКИПИРОВКА</span></div>
-            <div class="preview-axis">ПОЛИГОН · СЕКТОР 01</div>
+            <canvas id="inventory-preview-canvas" aria-label="3D-модель персонажа"></canvas>
+            <div id="inventory-preview-fallback" class="inventory-preview-fallback" aria-hidden="true">ПЕРСОНАЖ</div>
           </div>
-          <div class="operator-caption"><span class="status-led"></span> СНАРЯЖЕНИЕ · ПОЛЕВОЙ КОМПЛЕКТ</div>
+          <div class="operator-caption"><span class="status-led"></span> СНАРЯЖЕНИЕ</div>
         </aside>
         <div class="inventory-grid-column">
-          <div class="inventory-column-heading"><span>СЕТКА РЮКЗАКА</span><b>8 × 5</b></div>
+          <div class="inventory-column-heading"><span>РЮКЗАК</span><b>8 × 5</b></div>
           <div class="inventory-grid-wrap">
             <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
-            <div id="inventory-empty" class="inventory-empty">РЮКЗАК ПУСТ<br><small>Удерживая предмет, нажмите «В РЮКЗАК»</small></div>
+            <div id="inventory-empty" class="inventory-empty">ПУСТО<br><small>ДОБАВЬТЕ ПРЕДМЕТ</small></div>
           </div>
         </div>
         <aside class="inventory-side">
-          <div class="carry-caption">МАССА СНАРЯЖЕНИЯ</div>
+          <div class="carry-caption">ОБЩИЙ ВЕС</div>
           <div class="carry-weight"><b id="inventory-weight">0.0</b><span> / <i id="inventory-limit">30.0</i> кг</span></div>
           <div class="carry-track"><i id="inventory-weight-bar"></i></div>
           <section class="inventory-selection" aria-live="polite">
-            <div class="selection-kicker">ОПИСАНИЕ ПРЕДМЕТА</div>
-            <h3 id="inventory-selected-name">ПРЕДМЕТ НЕ ВЫБРАН</h3>
+            <div class="selection-kicker">ПРЕДМЕТ</div>
+            <h3 id="inventory-selected-name">НЕ ВЫБРАН</h3>
             <div class="selection-weight"><span>МАССА</span><b id="inventory-selected-weight">—</b></div>
-            <p id="inventory-selected-description">Нажмите на предмет в сетке, чтобы посмотреть его параметры.</p>
+            <p id="inventory-selected-description">Выберите предмет, чтобы увидеть описание.</p>
             <button id="inventory-take" class="inventory-take" type="button" disabled>ВЫБЕРИТЕ ПРЕДМЕТ</button>
+            <button id="inventory-drop" class="inventory-drop" type="button" disabled>ПОЛОЖИТЬ РЯДОМ</button>
+            <button id="inventory-stash" class="inventory-stash" type="button" disabled>УБРАТЬ В РЮКЗАК</button>
           </section>
-          <div id="inventory-message" class="inventory-message">Выберите предмет, чтобы увидеть параметры.</div>
-          <div class="inventory-legend"><span class="legend-dot"></span> РАЗМЕР ЯЧЕЙКИ ЗАВИСИТ ОТ ФОРМЫ ПРЕДМЕТА</div>
+          <div id="inventory-message" class="inventory-message"></div>
+          <div class="inventory-legend"><span class="legend-dot"></span> РАЗМЕР ЯЧЕЕК ЗАВИСИТ ОТ ПРЕДМЕТА</div>
         </aside>
       </div>
-      <footer class="inventory-footer"><span>ТАБ / ESC</span><i></i><span>ЗАКРЫТЬ РЮКЗАК</span><b>ОФЛАЙН · ЛОКАЛЬНОЕ ХРАНЕНИЕ</b></footer>
+      <footer class="inventory-footer"><span>×</span><i></i><span>ЗАКРЫТЬ</span></footer>
     </section>
   </div>
 
   <div id="death-overlay" class="death-overlay" aria-hidden="true">
     <div class="death-blood-wash"></div>
     <section class="death-card" role="dialog" aria-modal="true" aria-labelledby="death-title">
-      <span class="death-kicker">СИСТЕМА ЖИЗНЕОБЕСПЕЧЕНИЯ · ОТКЛЮЧЕНА</span>
+      <span class="death-kicker">КРИТИЧЕСКОЕ СОСТОЯНИЕ</span>
       <h2 id="death-title">ОПЕРАТОР ПОГИБ</h2>
-      <p id="death-detail">КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ</p>
-      <button id="death-restart" class="death-restart" type="button">ПЕРЕЗАПУСТИТЬ ИСПЫТАНИЕ <b>↻</b></button>
+      <p id="death-detail">ТЯЖЁЛОЕ РАНЕНИЕ</p>
+      <button id="death-restart" class="death-restart" type="button">НАЧАТЬ ЗАНОВО <b>↻</b></button>
     </section>
-  </div>
-
-  <div id="intro" class="intro-screen">
-    <div class="intro-grid"></div>
-    <div class="intro-panel">
-      <div class="intro-overline"><span></span> ИСПЫТАТЕЛЬНАЯ СИСТЕМА · 01</div>
-      <div class="intro-title">POLYGON<span>01</span></div>
-      <div class="intro-rule"><i></i></div>
-      <p>ФИЗИЧЕСКИЙ ПОЛИГОН</p>
-      <div class="intro-copy">Бетонная камера. Свободная физика.<br>Проверьте каждый предмет на прочность.</div>
-      <button id="start-button" class="start-button"><span>НАЧАТЬ ИСПЫТАНИЕ</span><b>↗</b></button>
-      <div class="intro-footer"><span>ОФЛАЙН РЕЖИМ</span><i></i><span>БЕЗ СЮЖЕТА · ТОЛЬКО ФИЗИКА</span></div>
-    </div>
-    <div class="intro-version">ANDROID BUILD <span>1.2</span></div>
   </div>
 
   <script src="game.js"></script>

@@ -630,7 +630,12 @@ function addLimitedJoint(human, aName, bName, pivotA, pivotB, angle, twist = 0.3
 }
 
 function buildMannequin(id, origin, colorIndex) {
-  const human = { id, origin, colorIndex, skin: dummySkinMaterials[colorIndex], parts: [], partMap: {}, constraints: [], active: false, hitFlash: 0 };
+  const human = {
+    id, origin, colorIndex, skin: dummySkinMaterials[colorIndex], parts: [], partMap: {}, constraints: [],
+    active: false, hitFlash: 0, behavior: id === 'D-01' ? 'peaceful' : 'aggressive', state: 'idle',
+    rootX: origin[0], rootZ: origin[2], yaw: 0, stateTime: 0, quietTime: 0, attackCooldown: 0,
+    punchSide: 1, walkPhase: 0, wanderTarget: null, navDirection: null
+  };
   const ox = origin[0], oz = origin[2];
   const position = (x, y, z) => [ox + x, y, oz + z];
   addRagdollPart(human, 'pelvis', [0.39, 0.28, 0.25], 5.2, position(0, 0.97, 0), dummyJointMaterial);
@@ -660,6 +665,14 @@ function buildMannequin(id, origin, colorIndex) {
     addLimitedJoint(human, `shin${suffix}`, `foot${suffix}`, [0, -0.205, 0], [0, 0.035, -0.075], 0.34, 0.42, [1, 0, 0]);
   }
   for (const part of human.parts) {
+    part.restLocal = {
+      x: part.body.position.x - ox,
+      y: part.body.position.y,
+      z: part.body.position.z - oz
+    };
+    part.restQuaternion = part.body.quaternion.clone();
+  }
+  for (const part of human.parts) {
     part.body.addEventListener('collide', (event) => {
       if (human.active) return;
       const other = event.body;
@@ -681,6 +694,373 @@ function buildMannequin(id, origin, colorIndex) {
 
 buildMannequin('D-01', [-3.6, 0, -4.55], 0);
 buildMannequin('D-02', [3.7, 0, -4.5], 1);
+
+const MANNEQUIN_KNEELING_POSE = {
+  pelvis: [0, 0.84, 0, 0.08, 0, 0],
+  torso: [0, 1.28, 0.025, 0.08, 0, 0],
+  head: [0, 1.69, 0.025, 0, 0, 0],
+  upperArmL: [-0.31, 1.18, 0.045, -0.12, 0, -0.04],
+  lowerArmL: [-0.34, 0.94, 0.16, -0.72, 0, 0],
+  handL: [-0.35, 0.77, 0.29, -0.55, 0, 0],
+  upperArmR: [0.31, 1.18, 0.045, -0.12, 0, 0.04],
+  lowerArmR: [0.34, 0.94, 0.16, -0.72, 0, 0],
+  handR: [0.35, 0.77, 0.29, -0.55, 0, 0],
+  thighL: [-0.125, 0.49, 0.055, 0, 0, 0],
+  shinL: [-0.13, 0.14, -0.115, -Math.PI / 2, 0, 0],
+  footL: [-0.13, 0.065, -0.30, 0, 0, 0],
+  thighR: [0.125, 0.49, 0.055, 0, 0, 0],
+  shinR: [0.13, 0.14, -0.115, -Math.PI / 2, 0, 0],
+  footR: [0.13, 0.065, -0.30, 0, 0, 0]
+};
+
+function mannequinLocalEntries(human, style = 'idle') {
+  const entries = {};
+  const phase = human.walkPhase;
+  const isMoving = style === 'walk' || style === 'attack';
+  const punchProgress = style === 'attack' ? Math.sin(THREE.MathUtils.clamp(human.stateTime / 0.74, 0, 1) * Math.PI) : 0;
+  for (const part of human.parts) {
+    const point = part.restLocal;
+    const entry = [point.x, point.y, point.z, 0, 0, 0];
+    if (part.key === 'pelvis' && isMoving) entry[1] += Math.sin(phase * 2) * 0.014;
+    if (part.key === 'torso' && isMoving) entry[1] += Math.sin(phase * 2 + 0.4) * 0.018;
+    if (part.key === 'head' && isMoving) entry[1] += Math.sin(phase * 2 + 0.7) * 0.012;
+    if (isMoving && /^(thigh|shin|foot)[LR]$/.test(part.key)) {
+      const side = part.key.endsWith('L') ? -1 : 1;
+      const swing = Math.sin(phase + (side > 0 ? Math.PI : 0));
+      if (part.key.startsWith('thigh')) {
+        entry[2] += swing * 0.105;
+        entry[3] = -swing * 0.3;
+      } else if (part.key.startsWith('shin')) {
+        entry[2] -= swing * 0.045;
+        entry[3] = Math.max(0, swing) * 0.3;
+      } else {
+        entry[2] += swing * 0.05;
+        entry[3] = -swing * 0.12;
+      }
+    }
+    if (isMoving && /^(upperArm|lowerArm|hand)[LR]$/.test(part.key)) {
+      const side = part.key.endsWith('L') ? -1 : 1;
+      const swing = Math.sin(phase + (side > 0 ? Math.PI : 0));
+      entry[2] -= swing * (part.key.startsWith('upperArm') ? 0.085 : 0.045);
+      entry[3] = -swing * (part.key.startsWith('upperArm') ? 0.4 : 0.18);
+    }
+    if (style === 'attack' && /^(upperArm|lowerArm|hand)[LR]$/.test(part.key)) {
+      const side = part.key.endsWith('L') ? -1 : 1;
+      const punching = side === human.punchSide;
+      if (punching) {
+        if (part.key.startsWith('upperArm')) {
+          entry[0] = side * 0.31; entry[1] = 1.43; entry[2] = 0.12 + punchProgress * 0.11; entry[3] = -0.92 * punchProgress;
+        } else if (part.key.startsWith('lowerArm')) {
+          entry[0] = side * 0.33; entry[1] = 1.22; entry[2] = 0.27 + punchProgress * 0.2; entry[3] = -1.12 * punchProgress;
+        } else {
+          entry[0] = side * 0.35; entry[1] = 1.08; entry[2] = 0.44 + punchProgress * 0.26; entry[3] = -0.75 * punchProgress;
+        }
+      } else if (part.key.startsWith('upperArm')) {
+        entry[1] = 1.37; entry[2] = 0.06; entry[3] = -0.26;
+      } else if (part.key.startsWith('lowerArm')) {
+        entry[1] = 1.18; entry[2] = 0.14; entry[3] = -0.48;
+      } else {
+        entry[1] = 1.02; entry[2] = 0.2; entry[3] = -0.38;
+      }
+    }
+    entries[part.key] = entry;
+  }
+  return entries;
+}
+
+function makeMannequinWorldPose(human, entries) {
+  const pose = {};
+  const cosine = Math.cos(human.yaw);
+  const sine = Math.sin(human.yaw);
+  const yawQuaternion = new CANNON.Quaternion();
+  yawQuaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), human.yaw);
+  for (const part of human.parts) {
+    const entry = entries[part.key] || [part.restLocal.x, part.restLocal.y, part.restLocal.z, 0, 0, 0];
+    const localQuaternion = new CANNON.Quaternion();
+    localQuaternion.setFromEuler(entry[3] || 0, entry[4] || 0, entry[5] || 0, 'XYZ');
+    const worldQuaternion = new CANNON.Quaternion();
+    yawQuaternion.mult(localQuaternion, worldQuaternion);
+    pose[part.key] = {
+      position: new CANNON.Vec3(
+        human.rootX + entry[0] * cosine + entry[2] * sine,
+        entry[1],
+        human.rootZ - entry[0] * sine + entry[2] * cosine
+      ),
+      quaternion: worldQuaternion
+    };
+  }
+  return pose;
+}
+
+function makeStandingMannequinPose(human, style = 'idle') {
+  return makeMannequinWorldPose(human, mannequinLocalEntries(human, style));
+}
+
+function makeKneelingMannequinPose(human) {
+  return makeMannequinWorldPose(human, MANNEQUIN_KNEELING_POSE);
+}
+
+function captureMannequinPose(human) {
+  const pose = {};
+  for (const part of human.parts) {
+    pose[part.key] = { position: part.body.position.clone(), quaternion: part.body.quaternion.clone() };
+  }
+  return pose;
+}
+
+function setMannequinBodyType(human, type) {
+  for (const part of human.parts) {
+    const body = part.body;
+    body.type = type;
+    body.mass = part.mass;
+    body.updateMassProperties();
+    body.force.set(0, 0, 0);
+    body.torque.set(0, 0, 0);
+    body.velocity.set(0, 0, 0);
+    body.angularVelocity.set(0, 0, 0);
+    body.wakeUp();
+  }
+  world.broadphase.dirty = true;
+}
+
+function setMannequinPose(human, pose, dt) {
+  const step = Math.max(0.001, dt);
+  for (const part of human.parts) {
+    const body = part.body;
+    const target = pose[part.key];
+    body.velocity.set(
+      THREE.MathUtils.clamp((target.position.x - body.position.x) / step, -9, 9),
+      THREE.MathUtils.clamp((target.position.y - body.position.y) / step, -9, 9),
+      THREE.MathUtils.clamp((target.position.z - body.position.z) / step, -9, 9)
+    );
+    body.quaternion.copy(target.quaternion);
+    body.angularVelocity.set(0, 0, 0);
+    body.force.set(0, 0, 0);
+    body.torque.set(0, 0, 0);
+    body.aabbNeedsUpdate = true;
+    body.wakeUp();
+  }
+  world.broadphase.dirty = true;
+}
+
+function blendMannequinPose(human, from, to, progress, dt) {
+  const blend = THREE.MathUtils.smoothstep(progress, 0, 1);
+  const step = Math.max(0.001, dt);
+  for (const part of human.parts) {
+    const body = part.body;
+    const start = from[part.key];
+    const end = to[part.key];
+    const x = THREE.MathUtils.lerp(start.position.x, end.position.x, blend);
+    const y = THREE.MathUtils.lerp(start.position.y, end.position.y, blend);
+    const z = THREE.MathUtils.lerp(start.position.z, end.position.z, blend);
+    body.velocity.set(
+      THREE.MathUtils.clamp((x - body.position.x) / step, -9, 9),
+      THREE.MathUtils.clamp((y - body.position.y) / step, -9, 9),
+      THREE.MathUtils.clamp((z - body.position.z) / step, -9, 9)
+    );
+    start.quaternion.slerp(end.quaternion, blend, body.quaternion);
+    body.angularVelocity.set(0, 0, 0);
+    body.force.set(0, 0, 0);
+    body.torque.set(0, 0, 0);
+    body.aabbNeedsUpdate = true;
+    body.wakeUp();
+  }
+  world.broadphase.dirty = true;
+}
+
+function beginMannequinRecovery(human) {
+  const pelvis = human.partMap.pelvis.body.position;
+  human.rootX = THREE.MathUtils.clamp(pelvis.x, -8.0, 8.0);
+  human.rootZ = THREE.MathUtils.clamp(pelvis.z, -6.0, 6.0);
+  const targetX = human.behavior === 'peaceful'
+    ? THREE.MathUtils.clamp(human.rootX + (human.rootX < 0 ? -2.6 : 2.6), -7.4, 7.4)
+    : playerBody.position.x;
+  const targetZ = human.behavior === 'peaceful' ? human.rootZ + 0.05 : playerBody.position.z;
+  human.yaw = Math.atan2(targetX - human.rootX, targetZ - human.rootZ);
+  human.recoveryFrom = captureMannequinPose(human);
+  human.kneelingPose = makeKneelingMannequinPose(human);
+  human.standingPose = makeStandingMannequinPose(human, 'idle');
+  human.state = 'recovering-to-knees';
+  human.stateTime = 0;
+  setMannequinBodyType(human, CANNON.Body.KINEMATIC);
+}
+
+function finishMannequinRecovery(human) {
+  human.stateTime = 0;
+  human.walkPhase = 0;
+  human.navDirection = null;
+  if (human.behavior === 'peaceful') {
+    const side = human.rootX < 0 ? -1 : 1;
+    human.wanderTarget = {
+      x: THREE.MathUtils.clamp(human.rootX + side * 2.6, -7.4, 7.4),
+      z: THREE.MathUtils.clamp(human.rootZ + 0.12, -5.9, 5.9)
+    };
+    human.state = 'walking-away';
+  } else {
+    human.state = 'chasing';
+  }
+}
+
+function getMannequinSteering(human, desiredX, desiredZ) {
+  const desiredLength = Math.hypot(desiredX, desiredZ);
+  if (desiredLength < 1e-4) return { x: 0, z: 0 };
+  desiredX /= desiredLength;
+  desiredZ /= desiredLength;
+  const angles = [0, 0.38, -0.38, 0.76, -0.76, 1.18, -1.18, 1.62, -1.62];
+  let best = { x: desiredX, z: desiredZ, score: -Infinity };
+  for (const angle of angles) {
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    const x = desiredX * cosine - desiredZ * sine;
+    const z = desiredX * sine + desiredZ * cosine;
+    let score = (x * desiredX + z * desiredZ) * 2.1;
+    if (human.navDirection) score += (x * human.navDirection.x + z * human.navDirection.z) * 0.24;
+    for (const record of physicsRecords) {
+      const body = record.body;
+      const meta = body.gameMeta;
+      if (meta?.kind !== 'prop' || meta.isStored || meta.isHeld) continue;
+      const ox = body.position.x - human.rootX;
+      const oz = body.position.z - human.rootZ;
+      const along = ox * x + oz * z;
+      if (along < -0.15 || along > 2.1) continue;
+      const across = Math.abs(ox * z - oz * x);
+      const radius = Math.min(1.35, Math.max(0.36, body.boundingRadius || 0.55)) + 0.38;
+      if (across < radius) {
+        const urgency = THREE.MathUtils.clamp((2.1 - Math.max(0, along)) / 1.75, 0.35, 1.45);
+        score -= (radius - across) * 2.2 * urgency;
+      }
+    }
+    if (score > best.score) best = { x, z, score };
+  }
+  human.navDirection = { x: best.x, z: best.z };
+  return best;
+}
+
+function faceMannequinToward(human, dx, dz, dt) {
+  if (Math.hypot(dx, dz) < 1e-4) return;
+  const targetYaw = Math.atan2(dx, dz);
+  let delta = targetYaw - human.yaw;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  human.yaw += THREE.MathUtils.clamp(delta, -dt * 5.5, dt * 5.5);
+}
+
+function moveMannequinToward(human, targetX, targetZ, speed, dt) {
+  const dx = targetX - human.rootX;
+  const dz = targetZ - human.rootZ;
+  const distance = Math.hypot(dx, dz);
+  if (distance < 0.025) return distance;
+  const direction = getMannequinSteering(human, dx, dz);
+  faceMannequinToward(human, direction.x, direction.z, dt);
+  const travel = Math.min(distance, speed * dt);
+  human.rootX = THREE.MathUtils.clamp(human.rootX + direction.x * travel, -8.0, 8.0);
+  human.rootZ = THREE.MathUtils.clamp(human.rootZ + direction.z * travel, -6.0, 6.0);
+  human.walkPhase += dt * (speed + 1.8);
+  return distance;
+}
+
+function mannequinFallIsSettled(human) {
+  let maxSpeed = 0;
+  let maxSpin = 0;
+  for (const part of human.parts) {
+    maxSpeed = Math.max(maxSpeed, part.body.velocity.length());
+    maxSpin = Math.max(maxSpin, part.body.angularVelocity.length());
+  }
+  return maxSpeed < 0.58 && maxSpin < 1.15;
+}
+
+function updateMannequinAI(dt) {
+  for (const human of mannequins) {
+    human.hitFlash = Math.max(0, human.hitFlash - dt);
+    if (!human.active) continue;
+    human.attackCooldown = Math.max(0, human.attackCooldown - dt);
+    if (human.state === 'falling') {
+      human.stateTime += dt;
+      human.quietTime = mannequinFallIsSettled(human) ? human.quietTime + dt : 0;
+      if (human.stateTime >= 1.15 && (human.quietTime >= 0.58 || human.stateTime >= 3.85)) beginMannequinRecovery(human);
+      continue;
+    }
+    if (human.state === 'recovering-to-knees') {
+      human.stateTime += dt;
+      blendMannequinPose(human, human.recoveryFrom, human.kneelingPose, human.stateTime / 1.2, dt);
+      if (human.stateTime >= 1.2) {
+        human.state = 'kneeling-hold';
+        human.stateTime = 0;
+      }
+      continue;
+    }
+    if (human.state === 'kneeling-hold') {
+      human.stateTime += dt;
+      setMannequinPose(human, human.kneelingPose, dt);
+      if (human.stateTime >= 0.48) {
+        human.state = 'recovering-to-feet';
+        human.stateTime = 0;
+      }
+      continue;
+    }
+    if (human.state === 'recovering-to-feet') {
+      human.stateTime += dt;
+      blendMannequinPose(human, human.kneelingPose, human.standingPose, human.stateTime / 1.08, dt);
+      if (human.stateTime >= 1.08) finishMannequinRecovery(human);
+      continue;
+    }
+    if (human.state === 'walking-away') {
+      const remaining = moveMannequinToward(human, human.wanderTarget.x, human.wanderTarget.z, 1.35, dt);
+      if (remaining < 0.24) {
+        human.state = 'idle-after';
+        human.stateTime = 0;
+      }
+      setMannequinPose(human, makeStandingMannequinPose(human, remaining > 0.24 ? 'walk' : 'idle'), dt);
+      continue;
+    }
+    if (human.state === 'idle-after') {
+      human.stateTime += dt;
+      setMannequinPose(human, makeStandingMannequinPose(human, 'idle'), dt);
+      continue;
+    }
+    if (human.behavior !== 'aggressive') continue;
+    const dx = playerBody.position.x - human.rootX;
+    const dz = playerBody.position.z - human.rootZ;
+    const distance = Math.hypot(dx, dz);
+    if (human.state === 'attacking') {
+      human.stateTime += dt;
+      faceMannequinToward(human, dx, dz, dt);
+      if (distance > 1.95 && human.stateTime < 0.28) {
+        human.state = 'chasing';
+        human.stateTime = 0;
+        setMannequinPose(human, makeStandingMannequinPose(human, 'walk'), dt);
+        continue;
+      }
+      setMannequinPose(human, makeStandingMannequinPose(human, 'attack'), dt);
+      if (!human.attackHitDone && human.stateTime >= 0.27) {
+        human.attackHitDone = true;
+        if (distance <= 1.55) receiveDamage(8, 'torso');
+      }
+      if (human.stateTime >= 0.74) {
+        human.state = 'chasing';
+        human.stateTime = 0;
+      }
+      continue;
+    }
+    if (distance <= 1.35 && human.attackCooldown <= 0) {
+      human.state = 'attacking';
+      human.stateTime = 0;
+      human.attackHitDone = false;
+      human.attackCooldown = 1.35;
+      human.punchSide *= -1;
+      faceMannequinToward(human, dx, dz, dt);
+      setMannequinPose(human, makeStandingMannequinPose(human, 'attack'), dt);
+      continue;
+    }
+    if (distance > 1.05) {
+      moveMannequinToward(human, playerBody.position.x, playerBody.position.z, 2.9, dt);
+      setMannequinPose(human, makeStandingMannequinPose(human, 'walk'), dt);
+    } else {
+      faceMannequinToward(human, dx, dz, dt);
+      setMannequinPose(human, makeStandingMannequinPose(human, 'idle'), dt);
+    }
+  }
+}
 
 const playerStart = new CANNON.Vec3(0, 0.87, 5.25);
 const playerBody = new CANNON.Body({
@@ -856,7 +1236,7 @@ let inventoryPreviewAccumulator = 0;
 
 let yaw = 0;
 let pitch = 0;
-let started = false;
+let started = true;
 let heldBody = null;
 let currentTarget = null;
 let joystick = { x: 0, y: 0, pointerId: null };
@@ -899,6 +1279,7 @@ const heldWorldOffset = new THREE.Vector3();
 
 function toast(text, duration = 1.45) {
   const element = $('toast');
+  if (!element) return;
   element.textContent = text;
   element.classList.add('visible');
   toastTimer = duration;
@@ -1062,6 +1443,9 @@ function activateMannequin(human, hitPart = human.partMap.torso, impact = 0, inc
     return;
   }
   human.active = true;
+  human.state = 'falling';
+  human.stateTime = 0;
+  human.quietTime = 0;
   human.hitFlash = 0.24;
   for (const part of human.parts) {
     part.body.type = CANNON.Body.DYNAMIC;
@@ -1085,22 +1469,7 @@ function activateMannequin(human, hitPart = human.partMap.torso, impact = 0, inc
       hitPart.body.applyImpulse(direction.scale(magnitude), hitPart.body.position);
     }
   }
-  updateRagdollCount();
   toast(manual ? `${human.id} · РАГДОЛЛ АКТИВИРОВАН` : `${human.id} · УДАР / РАГДОЛЛ`, 1.3);
-}
-
-function updateRagdollCount() {
-  $('ragdoll-count').textContent = `${mannequins.filter((human) => human.active).length} / ${mannequins.length}`;
-}
-
-function startGame() {
-  if (started) return;
-  started = true;
-  $('intro').classList.add('hidden');
-  if (!mobile && canvas.requestPointerLock) {
-    try { canvas.requestPointerLock(); } catch (_) { /* Pointer lock is optional. */ }
-  }
-  toast('КАМЕРА ГОТОВА · НАЧНИТЕ ТЕСТ', 1.8);
 }
 
 function makeCameraDirection() {
@@ -1120,66 +1489,23 @@ function getTargetMeta() {
 }
 
 function updateTargetUI() {
-  const reticle = $('reticle');
-  const readout = $('target-readout');
   const action = $('action-button');
-  const heldTag = $('held-tag');
-  const placeButton = $('place-button');
-  const stashButton = $('stash-button');
+  if (!action) return;
+  const label = $('action-label');
+  label.textContent = 'ДЕЙСТВИЕ';
   if (dead) {
     currentTarget = null;
-    reticle.classList.remove('locked');
-    readout.classList.remove('visible');
-    heldTag.classList.remove('visible');
-    placeButton.classList.remove('visible');
-    stashButton.classList.remove('visible');
     action.classList.remove('is-holding', 'has-target');
     return;
   }
   currentTarget = getTargetMeta();
   if (heldBody) {
-    const meta = heldBody.gameMeta;
-    $('held-name').textContent = meta.name;
-    heldTag.classList.add('visible');
-    placeButton.classList.add('visible');
-    stashButton.classList.add('visible');
     action.classList.add('is-holding');
     action.classList.remove('has-target');
-    $('action-label').textContent = 'БРОСИТЬ';
-    $('action-subtitle').textContent = `${meta.name} · ${meta.mass.toFixed(1)} КГ`;
-    reticle.classList.remove('locked');
-    readout.classList.remove('visible');
     return;
   }
-  heldTag.classList.remove('visible');
-  placeButton.classList.remove('visible');
-  stashButton.classList.remove('visible');
   action.classList.remove('is-holding');
-  if (currentTarget?.meta.kind === 'prop') {
-    const meta = currentTarget.meta;
-    reticle.classList.add('locked');
-    readout.classList.add('visible');
-    $('target-name').textContent = `${meta.type} · ${meta.name}`;
-    $('target-detail').textContent = `${meta.detail} · ${currentTarget.distance.toFixed(1)} М`;
-    $('action-label').textContent = 'ВЗЯТЬ';
-    $('action-subtitle').textContent = 'ПОДНЯТЬ / БРОСИТЬ';
-    action.classList.add('has-target');
-  } else if (currentTarget?.meta.kind === 'mannequin') {
-    const meta = currentTarget.meta;
-    reticle.classList.add('locked');
-    readout.classList.add('visible');
-    $('target-name').textContent = `МАНЕКЕН · ${meta.human.id}`;
-    $('target-detail').textContent = meta.human.active ? 'АКТИВЕН · ФИЗИКА RAGDOLL' : 'БОЛВАНКА · КОНТАКТНАЯ ЦЕЛЬ';
-    $('action-label').textContent = meta.human.active ? 'ИМПУЛЬС' : 'УДАРИТЬ';
-    $('action-subtitle').textContent = 'АКТИВИРОВАТЬ РАГДОЛЛ';
-    action.classList.add('has-target');
-  } else {
-    reticle.classList.remove('locked');
-    readout.classList.remove('visible');
-    $('action-label').textContent = 'ДЕЙСТВИЕ';
-    $('action-subtitle').textContent = 'ВЫБЕРИТЕ ЦЕЛЬ';
-    action.classList.remove('has-target');
-  }
+  action.classList.toggle('has-target', Boolean(currentTarget));
 }
 
 function suspendPlayerCollision(meta) {
@@ -1209,7 +1535,6 @@ function pickUp(meta) {
   body.wakeUp();
   world.broadphase.dirty = true;
   setHandPose(1);
-  $('held-name').textContent = meta.name;
   toast(`${meta.name} · ${meta.mass.toFixed(1)} КГ`, 1.15);
 }
 
@@ -1379,7 +1704,9 @@ function updateInventoryUI() {
   $('inventory-weight-bar').style.width = `${Math.min(100, total / INVENTORY_WEIGHT_LIMIT * 100)}%`;
   $('inventory-weight-bar').style.background = total / INVENTORY_WEIGHT_LIMIT > 0.82 ? '#d08353' : '#a4c17e';
   $('inventory-empty').style.display = inventoryItems.length ? 'none' : 'flex';
-  $('inventory-message').textContent = inventoryItems.length ? 'Выберите предмет, чтобы увидеть его размеры и свойства.' : 'Сложите предмет в рюкзак кнопкой «В РЮКЗАК».';
+  $('inventory-message').textContent = inventoryItems.length ? 'Выберите предмет, чтобы увидеть его размеры и свойства.' : 'Предметы можно убрать сюда из рук.';
+  $('inventory-drop').disabled = !heldBody;
+  $('inventory-stash').disabled = !heldBody;
   updateInventorySelection();
 }
 
@@ -1510,8 +1837,7 @@ function takeInventoryItem(id) {
 }
 
 function doAction() {
-  if (dead) return;
-  if (!started || inventoryOpen) { if (!started) startGame(); return; }
+  if (dead || !started || inventoryOpen) return;
   if (heldBody) { throwHeld(); return; }
   const target = currentTarget || getTargetMeta();
   if (!target) {
@@ -1574,7 +1900,8 @@ function updatePlayer(dt) {
   }
   const length = Math.hypot(strafe, forward);
   if (length > 1) { strafe /= length; forward /= length; }
-  const speed = !inventoryOpen && (keys.has('ShiftLeft') || keys.has('ShiftRight')) ? 5.25 : 3.8;
+  const sprinting = !inventoryOpen && (keys.has('ShiftLeft') || keys.has('ShiftRight') || Math.hypot(joystick.x, joystick.y) > 0.84);
+  const speed = sprinting ? 5.25 : 3.8;
   const dx = -Math.sin(yaw) * forward + Math.cos(yaw) * strafe;
   const dz = -Math.cos(yaw) * forward - Math.sin(yaw) * strafe;
   const smoothing = Math.min(1, dt * (length > 0.02 ? 13 : 17));
@@ -1662,10 +1989,6 @@ function syncVisuals() {
   }
 }
 
-function updateMannequinCountAndFlash(dt) {
-  for (const human of mannequins) human.hitFlash = Math.max(0, human.hitFlash - dt);
-}
-
 function animate(time) {
   requestAnimationFrame(animate);
   const dt = Math.min(0.05, Math.max(0.001, (time - (animate.lastTime || time)) / 1000));
@@ -1698,6 +2021,7 @@ function animate(time) {
       last.z = record.body.velocity.z;
     }
   }
+  updateMannequinAI(dt);
   world.step(1 / 60, dt, 4);
   if (pendingDeathRelease) {
     releaseHeldAfterDeath();
@@ -1707,7 +2031,6 @@ function animate(time) {
   updatePlayerCollisionMasks();
   updateNeeds(dt);
   syncVisuals();
-  updateMannequinCountAndFlash(dt);
   targetRefresh += dt;
   if (targetRefresh > 0.09) {
     updateTargetUI();
@@ -1762,7 +2085,7 @@ joystickRoot.addEventListener('pointercancel', resetJoystick);
 
 function beginLook(event) {
   if (!started || dead || inventoryOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
-  if (event.target.closest('button, #joystick, #intro, .target-readout')) return;
+  if (event.target.closest('button, #joystick, .vitals-panel')) return;
   if (event.pointerType === 'mouse' && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
     try { canvas.requestPointerLock(); } catch (_) { /* Non-essential for browser testing. */ }
   }
@@ -1787,12 +2110,44 @@ window.addEventListener('pointermove', (event) => {
 window.addEventListener('pointerup', (event) => { if (lookState?.pointerId === event.pointerId) lookState = null; }, { passive: true });
 window.addEventListener('pointercancel', () => { lookState = null; }, { passive: true });
 
-$('action-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); doAction(); });
-$('place-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); dropHeld(); });
-$('stash-button').addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); storeHeldInInventory(); });
-$('inventory-button').addEventListener('click', () => setInventoryOpen(!inventoryOpen));
+const actionButton = $('action-button');
+let actionPointerId = null;
+let actionLongPressTimer = 0;
+let actionLongPressTriggered = false;
+function clearActionLongPress() {
+  if (actionLongPressTimer) clearTimeout(actionLongPressTimer);
+  actionLongPressTimer = 0;
+  actionPointerId = null;
+}
+actionButton.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (dead || inventoryOpen) return;
+  actionPointerId = event.pointerId;
+  actionLongPressTriggered = false;
+  try { actionButton.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is optional. */ }
+  actionLongPressTimer = setTimeout(() => {
+    if (actionPointerId !== event.pointerId || dead) return;
+    actionLongPressTriggered = true;
+    setInventoryOpen(true);
+  }, 560);
+});
+actionButton.addEventListener('pointerup', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.pointerId !== actionPointerId) return;
+  if (actionLongPressTimer) clearTimeout(actionLongPressTimer);
+  actionLongPressTimer = 0;
+  const openedInventory = actionLongPressTriggered;
+  actionPointerId = null;
+  if (!openedInventory) doAction();
+});
+actionButton.addEventListener('pointercancel', clearActionLongPress);
+actionButton.addEventListener('contextmenu', (event) => event.preventDefault());
 $('inventory-close').addEventListener('click', () => setInventoryOpen(false));
 $('inventory-take').addEventListener('click', () => { if (selectedInventoryId) takeInventoryItem(selectedInventoryId); });
+$('inventory-drop').addEventListener('click', () => { if (heldBody) { dropHeld(); updateInventoryUI(); } });
+$('inventory-stash').addEventListener('click', () => storeHeldInInventory());
 $('inventory-overlay').addEventListener('click', (event) => { if (event.target === $('inventory-overlay')) setInventoryOpen(false); });
 $('death-restart').addEventListener('click', () => window.location.reload());
 $('injury-doll').addEventListener('pointerdown', (event) => {
@@ -1809,8 +2164,6 @@ $('injury-doll').addEventListener('keydown', (event) => {
   event.preventDefault();
   selectBodyPart(target.id.replace('injury-', ''));
 });
-$('start-button').addEventListener('click', startGame);
-$('reset-button').addEventListener('click', () => window.location.reload());
 document.addEventListener('keydown', (event) => {
   if (dead) {
     if (event.code === 'KeyR') { event.preventDefault(); window.location.reload(); return; }
@@ -1835,7 +2188,6 @@ document.addEventListener('keydown', (event) => {
 document.addEventListener('keyup', (event) => keys.delete(event.code));
 document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); lookState = null; } });
 
-updateRagdollCount();
 updateHealthHUD();
 updateNeedsHUD();
 updateInventoryUI();
