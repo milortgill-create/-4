@@ -1,5 +1,7 @@
 export const SNOW_SCOOP_AMOUNT = 0.28;
 export const SNOW_CARRY_SPEED_FACTOR = 0.72;
+export const PLAYER_WALK_SPEED = 5.5;
+export const PLAYER_SPRINT_SPEED = 8.5;
 export const HEAT_WARMING_RATE = 5.5;
 export const HEAT_COOLING_RATE = 0.36;
 

@@ -1,9 +1,10 @@
-# POLYGON 01 — v1.7.1 «Карпятник: исправление запуска»
+# POLYGON 01 — v1.8.0 «Тётя Зина»
 
-Hotfix for the village update. Fixed the snowbank-spawn function name that stopped JavaScript initialization before the first frame, leaving the Android screen black. Added a full startup/first-frame runtime smoke test so scene-construction errors are caught by CI.
+- Removed all world-space text signs and plaques: the stop, shop, pond, hangars and item props have no readable 3D lettering. Buildings and scenery identify locations visually.
+- Increased movement to 5.5 m/s walking and 8.5 m/s sprinting. Android has a hold-to-sprint button beside the joystick; keyboard players can hold Shift.
+- Reworked the landscape into a smooth high ridge at the bus stop, a gentle continuous downhill toward the central village, and a lower western basin. Rendered terrain and short, overlapping physics sections follow the same height profile.
+- Added Aunt Zina beside the shop in winter clothing. She stays in place and smoothly turns her head toward nearby players.
 
-- The supplied village map loads into a visible, walkable 3D world with a rendered snow-covered ground, smooth physical 2% grade, roads, homes, fences, pond, school, shop, garages, Mikhtok hangars and scrap yards.
-- Start at the eastern bus stop facing west into the village; physical snowdrifts load with the scene and can be dug with the shovel.
-- Preserves the offline Android game, empty backpack, hidden FP hands when unarmed, survival needs, snow carrying, wood stove, fire and warmth.
+The map retains its snowy village, fenced homes, shop, school, garages, industrial yards, pond and shovel-diggable physical snowbanks. The game remains offline on Android; gameplay assets are bundled locally.
 
-Debug-signed APK for Android 6.0+ (API 23). Gameplay assets are bundled locally; no network connection is required.
+Debug-signed APK for Android 6.0+ (API 23).

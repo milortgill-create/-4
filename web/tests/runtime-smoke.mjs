@@ -23,12 +23,18 @@ class FakeElement {
     this.checked = false;
     this.children = [];
     this.attributes = {};
+    this.listeners = new Map();
     this.width = 390;
     this.height = 844;
     this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
   }
-  addEventListener() {}
+  addEventListener(type, callback) {
+    const callbacks = this.listeners.get(type) || [];
+    callbacks.push(callback);
+    this.listeners.set(type, callbacks);
+  }
   removeEventListener() {}
+  dispatch(type, event) { for (const callback of this.listeners.get(type) || []) callback(event); }
   appendChild(child) { this.children.push(child); return child; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
@@ -127,7 +133,7 @@ const sandbox = {
 let source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 source = source.replace(/^import .*;\s*$/gm, '');
 source = source.replaceAll('new THREE.WebGLRenderer(', 'new TestRenderer(');
-source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts;';
+source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts; globalThis.__auntZina = auntZina; globalThis.__updateAuntZinaAI = updateAuntZinaAI; globalThis.__updatePlayer = updatePlayer; globalThis.__keys = keys; globalThis.__joystick = joystick; globalThis.__sprintButton = sprintButton; globalThis.__isSprintHeld = () => sprintHeld; globalThis.__startGame = () => { started = true; };';
 
 runInNewContext(source, sandbox, { filename: 'main.js', timeout: 30_000 });
 assert.ok(sandbox.__scene.children.length > 100, 'complete village geometry should be present in the scene');
@@ -146,4 +152,57 @@ assert.ok(viewDirection.x < -0.9, 'the initial view should face west into the vi
 assert.ok(Number.isFinite(sandbox.__player.position.y), 'the player should remain on a valid physical surface on frame one');
 assert.ok(scheduledFrame, 'the animation loop should continue scheduling frames');
 
-console.log(`runtime OK: village scene initialized (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} physics bodies) and first frame rendered`);
+assert.equal(sandbox.__auntZina.root.userData.npcId, 'aunt-zina', 'the shop-side resident should be a real scene character');
+assert.equal(sandbox.__auntZina.root.position.x, village.VILLAGE_LAYOUT.auntZina.x);
+assert.equal(sandbox.__auntZina.root.position.z, village.VILLAGE_LAYOUT.auntZina.z);
+const zinaHome = sandbox.__auntZina.root.position.clone();
+const playerHome = sandbox.__player.position.clone();
+sandbox.__player.position.set(zinaHome.x + 2, zinaHome.y + 0.87, zinaHome.z - 7);
+const initialHeadYaw = sandbox.__auntZina.head.rotation.y;
+for (let i = 0; i < 30; i++) sandbox.__updateAuntZinaAI(0.05);
+assert.ok(Math.abs(sandbox.__auntZina.head.rotation.y - initialHeadYaw) > 0.15, 'Aunt Zina should turn her head toward a nearby player');
+assert.deepEqual(sandbox.__auntZina.root.position.toArray(), zinaHome.toArray(), 'Aunt Zina should stay planted by the shop while tracking the player');
+sandbox.__player.position.copy(playerHome);
+sandbox.__player.velocity.set(0, 0, 0);
+sandbox.__keys.clear();
+sandbox.__joystick.x = 0;
+sandbox.__joystick.y = 0;
+sandbox.__keys.add('KeyW');
+for (let i = 0; i < 90; i++) sandbox.__updatePlayer(1 / 60);
+assert.ok(Math.abs(Math.hypot(sandbox.__player.velocity.x, sandbox.__player.velocity.z) - survival.PLAYER_WALK_SPEED) < 0.05, 'walking should reach a normal shooter pace');
+
+sandbox.__player.velocity.x = 0;
+sandbox.__player.velocity.z = 0;
+sandbox.__keys.clear();
+sandbox.__keys.add('KeyW');
+sandbox.__startGame();
+const sprintEvent = { pointerId: 7, preventDefault() {}, stopPropagation() {} };
+sandbox.__sprintButton.dispatch('pointerdown', sprintEvent);
+assert.equal(sandbox.__isSprintHeld(), true, 'the touch sprint button should hold sprint');
+for (let i = 0; i < 90; i++) sandbox.__updatePlayer(1 / 60);
+assert.ok(Math.abs(Math.hypot(sandbox.__player.velocity.x, sandbox.__player.velocity.z) - survival.PLAYER_SPRINT_SPEED) < 0.05, 'the touch button should reach the faster sprint pace');
+sandbox.__sprintButton.dispatch('pointerup', { pointerId: 7 });
+assert.equal(sandbox.__isSprintHeld(), false, 'releasing the touch sprint button should stop the sprint boost');
+
+function simulateTravel(useSprint) {
+  const startX = village.VILLAGE_LAYOUT.stop.x;
+  const startZ = village.VILLAGE_LAYOUT.stop.z + 4;
+  sandbox.__player.position.set(startX, village.terrainHeightAt(startX) + 0.87, startZ);
+  sandbox.__player.velocity.set(0, 0, 0);
+  sandbox.__keys.clear();
+  sandbox.__keys.add('KeyW');
+  if (useSprint) sandbox.__sprintButton.dispatch('pointerdown', sprintEvent);
+  for (let i = 0; i < 60; i++) {
+    sandbox.__updatePlayer(1 / 60);
+    sandbox.__world.step(1 / 60, 1 / 60, 4);
+  }
+  if (useSprint) sandbox.__sprintButton.dispatch('pointerup', { pointerId: 7 });
+  sandbox.__keys.clear();
+  return startX - sandbox.__player.position.x;
+}
+const walkingDistance = simulateTravel(false);
+const sprintingDistance = simulateTravel(true);
+assert.ok(walkingDistance > 3.5, `the player must move briskly while walking (travelled ${walkingDistance.toFixed(2)} m in one second)`);
+assert.ok(sprintingDistance > walkingDistance * 1.25, 'physical movement under the sprint button should be meaningfully faster than walking');
+
+console.log(`runtime OK: village (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} bodies), first frame, Aunt Zina head tracking and physical walk/sprint`);

@@ -1,13 +1,43 @@
 export const VILLAGE_BOUNDS = Object.freeze({ minX: -310, maxX: 310, minZ: -450, maxZ: 450 });
 
-// West/low basin to east/high plateau: a constant 2% grade gives exactly 1 m of rise per 50 m.
+// A smooth west-low / center-middle / east-high profile keeps the bus stop on the ridge
+// and gives the road an immediately walkable, gentle downhill toward the village.
+function smoothStep01(value) {
+  const t = Math.max(0, Math.min(1, value));
+  return t * t * (3 - 2 * t);
+}
+
 export function terrainHeightAt(x) {
-  return Math.max(0, Math.min(4, (x + 100) * 0.02));
+  if (x <= -230) return 0;
+  if (x < 30) return 2 * smoothStep01((x + 230) / 260);
+  if (x < 230) return 2 + 2 * smoothStep01((x - 30) / 200);
+  return 4;
+}
+
+export function terrainSlopeAt(x) {
+  if (x <= -230 || x >= 230) return 0;
+  if (x < 30) {
+    const t = (x + 230) / 260;
+    return 12 * t * (1 - t) / 260;
+  }
+  const t = (x - 30) / 200;
+  return 12 * t * (1 - t) / 200;
+}
+
+export const TERRAIN_COLLIDER_SEGMENT_WIDTH = 10;
+export function terrainColliderSegments(segmentWidth = TERRAIN_COLLIDER_SEGMENT_WIDTH) {
+  const count = Math.ceil((VILLAGE_BOUNDS.maxX - VILLAGE_BOUNDS.minX) / segmentWidth);
+  const width = (VILLAGE_BOUNDS.maxX - VILLAGE_BOUNDS.minX) / count;
+  return Array.from({ length: count }, (_, index) => {
+    const centerX = VILLAGE_BOUNDS.minX + (index + 0.5) * width;
+    return Object.freeze({ centerX, width, height: terrainHeightAt(centerX), slope: terrainSlopeAt(centerX) });
+  });
 }
 
 export const VILLAGE_LAYOUT = Object.freeze({
-  pond: Object.freeze({ x: -232, z: -356, radiusX: 34, radiusZ: 23, label: 'КАРПЯТНИК' }),
+  pond: Object.freeze({ x: -232, z: -356, radiusX: 34, radiusZ: 23 }),
   stop: Object.freeze({ x: 232, z: 164 }),
+  auntZina: Object.freeze({ x: 33, z: 184.3, yaw: Math.PI }),
   school: Object.freeze({ x: -164, z: 236, width: 32, depth: 21 }),
   shop: Object.freeze({ x: 42, z: 178, width: 13, depth: 9 }),
   garages: Object.freeze([

@@ -82,5 +82,5 @@ jobs:
               --notes-file .github/release-notes.md
           fi
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "POLYGON 01 — v1.7.1 «Карпятник: исправление запуска»" \
+            --title "POLYGON 01 — v1.8.0 «Тётя Зина»" \
             --notes-file .github/release-notes.md

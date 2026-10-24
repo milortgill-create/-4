@@ -58,7 +58,7 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 .injury-status { min-height: 8px; color: #718079; font-size: 6px; letter-spacing: .15em; }
 .injury-status.alert { color: #e47869; }
 
-/* Android touch controls: movement on the left, one contextual action on the right. */
+/* Touch controls: movement and sprint on the left, one contextual action on the right. */
 .joystick {
   position: absolute;
   z-index: 8;
@@ -97,6 +97,26 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
   transition: background .12s;
 }
 .joystick-knob span { width: 5px; height: 5px; border-radius: 50%; background: rgba(220, 247, 233, .82); box-shadow: 0 0 7px rgba(180, 235, 210, .7); }
+.sprint-button {
+  position: absolute;
+  z-index: 8;
+  left: max(8px, env(safe-area-inset-left));
+  bottom: max(143px, calc(env(safe-area-inset-bottom) + 142px));
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(220, 206, 151, .5);
+  border-radius: 50%;
+  color: #f1e4bd;
+  background: linear-gradient(145deg, rgba(87, 76, 46, .72), rgba(25, 34, 29, .84));
+  box-shadow: 0 3px 16px rgba(0,0,0,.28), inset 0 0 12px rgba(229, 201, 123, .12);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.sprint-button svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.sprint-button[aria-pressed="true"] { border-color: #f3d78e; color: #fff0c2; background: linear-gradient(145deg, rgba(136, 104, 45, .9), rgba(57, 48, 30, .94)); box-shadow: 0 0 15px rgba(225, 184, 88, .28), inset 0 0 12px rgba(255, 224, 144, .2); }
 .action-button {
   position: absolute;
   z-index: 8;
@@ -194,7 +214,7 @@ button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulat
 .death-card p { margin: 0 0 17px; color: #ab766d; font-size: 8px; letter-spacing: .12em; }
 .death-restart { width: 100%; height: 38px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; border: 1px solid rgba(201, 91, 72, .55); color: #efd8cc; background: linear-gradient(90deg, rgba(119, 44, 35, .72), rgba(50, 26, 23, .76)); font-size: 8px; font-weight: 700; letter-spacing: .11em; }
 .death-restart b { color: #e3a18f; font-size: 14px; font-weight: 400; }
-body.dead .joystick, body.dead .action-button { opacity: 0; pointer-events: none; }
+body.dead .joystick, body.dead .sprint-button, body.dead .action-button { opacity: 0; pointer-events: none; }
 body.damage-flash .vignette { background: radial-gradient(ellipse at center, rgba(120, 18, 12, .06) 22%, rgba(138, 29, 20, .45) 100%); }
 
 @media (max-width: 760px) {

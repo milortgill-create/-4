@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
-import { scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
-import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, terrainHeightAt } from './village.js';
+import { PLAYER_WALK_SPEED, PLAYER_SPRINT_SPEED, scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
+import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, terrainHeightAt, terrainSlopeAt, terrainColliderSegments } from './village.js';
 
 const isMeleeWeapon = (weapon) => weapon?.type === 'melee' || weapon?.type === 'tool';
 
@@ -54,7 +54,8 @@ const COLLISION_GROUP_RAGDOLL = 8;
 const COLLISION_MASK_ALL = COLLISION_GROUP_WORLD | COLLISION_GROUP_PLAYER | COLLISION_GROUP_PROPS | COLLISION_GROUP_RAGDOLL;
 world.addContactMaterial(new CANNON.ContactMaterial(floorPhysicsMaterial, objectPhysicsMaterial, { friction: 0.75, restitution: 0.06, contactEquationStiffness: 1e7, contactEquationRelaxation: 3 }));
 world.addContactMaterial(new CANNON.ContactMaterial(objectPhysicsMaterial, objectPhysicsMaterial, { friction: 0.55, restitution: 0.09 }));
-world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, floorPhysicsMaterial, { friction: 0.56, restitution: 0.0 }));
+// Horizontal movement is controller-driven, so high Coulomb friction would cancel each step's velocity.
+world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, floorPhysicsMaterial, { friction: 0.03, restitution: 0.0 }));
 world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, objectPhysicsMaterial, { friction: 0.18, restitution: 0.0 }));
 world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, dummyPhysicsMaterial, { friction: 0.35, restitution: 0.02 }));
 
@@ -281,23 +282,6 @@ function makeWoodTexture(base, seed) {
   return texture;
 }
 
-function makeCanvasLabel(topLine, bottomLine, accent = '#9bdac1') {
-  const labelCanvas = document.createElement('canvas');
-  labelCanvas.width = 512;
-  labelCanvas.height = 192;
-  const ctx = labelCanvas.getContext('2d');
-  ctx.fillStyle = '#182427'; ctx.fillRect(0, 0, 512, 192);
-  ctx.fillStyle = '#26393b'; ctx.fillRect(10, 10, 492, 172);
-  ctx.strokeStyle = accent; ctx.lineWidth = 3; ctx.strokeRect(12, 12, 488, 168);
-  ctx.fillStyle = accent; ctx.fillRect(28, 28, 6, 136);
-  ctx.fillStyle = '#e3eee5'; ctx.font = '700 35px Arial'; ctx.fillText(topLine, 55, 83);
-  ctx.fillStyle = '#8ba49c'; ctx.font = '20px Arial'; ctx.fillText(bottomLine, 57, 128);
-  ctx.fillStyle = accent; ctx.fillRect(440, 40, 38, 38); ctx.fillStyle = '#13201e'; ctx.font = '700 20px Arial'; ctx.fillText('01', 448, 66);
-  const texture = new THREE.CanvasTexture(labelCanvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
 const wallTexture = makeWoodTexture('#775a3d', 319);
 wallTexture.repeat.set(5.4, 1.8);
 const floorTexture = makeSnowTexture('#e2e9e9', 81, 4.6, 3.5);
@@ -450,9 +434,8 @@ function addVillageTerrain() {
       const height = terrainHeightAt(x);
       positions.push(x, height - 0.012, z);
       let color;
-      if (x <= -100) color = lowColor;
-      else if (x >= 100) color = highColor;
-      else color = lowColor.clone().lerp(middleColor, (x + 100) / 200);
+      if (height <= 2) color = lowColor.clone().lerp(middleColor, height / 2);
+      else color = middleColor.clone().lerp(highColor, (height - 2) / 2);
       colors.push(color.r, color.g, color.b);
       uvs.push((x - minX) / (maxX - minX), (z - minZ) / (maxZ - minZ));
       if (ix < nx && iz < nz) {
@@ -476,14 +459,19 @@ function addVillageTerrain() {
   floorSurfaceMesh = terrain;
   scene.add(terrain);
 
-  // Three overlapping static physics slabs provide a continuous, walkable 2% eastbound grade.
-  addStaticCollider([-205.25, -0.42, 0], [106.25, 0.42, 450]);
-  const ramp = new CANNON.Body({ mass: 0, material: floorPhysicsMaterial, collisionFilterGroup: COLLISION_GROUP_WORLD, collisionFilterMask: COLLISION_MASK_ALL });
-  ramp.addShape(new CANNON.Box(new CANNON.Vec3(100.5, 0.5, 450)));
-  ramp.position.set(0, 1.5, 0);
-  ramp.quaternion.setFromEuler(0, 0, Math.atan(0.02), 'XYZ');
-  world.addBody(ramp);
-  addStaticCollider([205.25, 3.58, 0], [106.25, 0.42, 450]);
+  // Overlapping short static slabs follow the smooth height profile without ledges.
+  for (const segment of terrainColliderSegments()) {
+    const collider = new CANNON.Body({
+      mass: 0,
+      material: floorPhysicsMaterial,
+      collisionFilterGroup: COLLISION_GROUP_WORLD,
+      collisionFilterMask: COLLISION_MASK_ALL
+    });
+    collider.addShape(new CANNON.Box(new CANNON.Vec3(segment.width / 2 + 0.14, 0.5, (maxZ - minZ) / 2)));
+    collider.position.set(segment.centerX, segment.height - 0.5, 0);
+    collider.quaternion.setFromEuler(0, 0, Math.atan(segment.slope), 'XYZ');
+    world.addBody(collider);
+  }
   world.broadphase.dirty = true;
 }
 addVillageTerrain();
@@ -512,6 +500,10 @@ const villageRoofMaterials = [
   new THREE.MeshStandardMaterial({ color: 0x66513d, roughness: 0.94, metalness: 0.02 }),
   new THREE.MeshStandardMaterial({ color: 0x573c31, roughness: 0.88, metalness: 0.04 }),
   new THREE.MeshStandardMaterial({ color: 0x59646a, roughness: 0.48, metalness: 0.38 })
+];
+const shopAwningMaterials = [
+  new THREE.MeshStandardMaterial({ color: 0x315b4f, roughness: 0.82 }),
+  new THREE.MeshStandardMaterial({ color: 0xd8c9a9, roughness: 0.9 })
 ];
 const fenceWoodMaterial = new THREE.MeshStandardMaterial({ color: 0x665039, roughness: 0.93 });
 const doorPanelMaterial = new THREE.MeshStandardMaterial({ color: 0x493a2d, roughness: 0.9 });
@@ -654,7 +646,7 @@ function addPhysicsProp(meta, shape, mass, position, visual, yaw = 0, extra = {}
   return body;
 }
 
-function createCrateVisual(w, h, d, baseColor, label) {
+function createCrateVisual(w, h, d, baseColor) {
   const group = new THREE.Group();
   const woodIndex = Math.abs(Math.floor(baseColor)) % woodMaps.length;
   const bodyMaterial = new THREE.MeshStandardMaterial({ map: woodMaps[woodIndex], bumpMap: woodBumpMaps[woodIndex], bumpScale: 0.04, color: baseColor, roughness: 0.9, metalness: 0.03 });
@@ -673,13 +665,10 @@ function createCrateVisual(w, h, d, baseColor, label) {
     rail.position.y = sy * (h / 2 - beamH / 2);
     group.add(rail);
   }
-  const plate = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.42, h * 0.22), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(label, 'LOAD TEST / SEALED'), roughness: 0.76, metalness: 0.1 }));
-  plate.position.set(0, 0, d / 2 + 0.008);
-  group.add(plate);
   return group;
 }
 
-function createBarrelVisual(radius, height, materialIndex, label) {
+function createBarrelVisual(radius, height, materialIndex) {
   const group = new THREE.Group();
   const shell = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.9, radius, height, 20, 1), barrelMaterials[materialIndex]);
   group.add(shell);
@@ -690,12 +679,10 @@ function createBarrelVisual(radius, height, materialIndex, label) {
   midHoop.rotation.x = Math.PI / 2; midHoop.position.y = -height * 0.09; group.add(midHoop);
   const top = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.85, radius * 0.85, 0.035, 20), trimMaterial);
   top.position.y = height / 2 - 0.015; group.add(top);
-  const labelPlate = new THREE.Mesh(new THREE.PlaneGeometry(radius * 1.15, height * 0.23), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(label, 'TARE / STEEL DRUM'), roughness: 0.78 }));
-  labelPlate.position.set(0, 0.04, radius * 0.89 + 0.008); group.add(labelPlate);
   return group;
 }
 
-function createBottleVisual(materialIndex, label) {
+function createBottleVisual(materialIndex) {
   const group = new THREE.Group();
   const pts = [
     new THREE.Vector2(0, -0.22), new THREE.Vector2(0.073, -0.22), new THREE.Vector2(0.103, -0.19),
@@ -712,8 +699,6 @@ function createBottleVisual(materialIndex, label) {
   cap.position.y = 0.257; group.add(cap);
   const band = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.055, 16), new THREE.MeshStandardMaterial({ color: 0xd7d7bc, roughness: 0.6 }));
   band.position.y = -0.045; group.add(band);
-  const labelMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.038), new THREE.MeshBasicMaterial({ map: makeCanvasLabel(label, 'LAB SAMPLE'), toneMapped: false }));
-  labelMesh.position.set(0, -0.045, 0.104); group.add(labelMesh);
   return group;
 }
 
@@ -762,7 +747,7 @@ function createShovelVisual() {
 
 function addCrate(name, position, size, mass, hue, yaw = 0) {
   const [w, h, d] = size;
-  const visual = createCrateVisual(w, h, d, hue, name);
+  const visual = createCrateVisual(w, h, d, hue);
   const body = addPhysicsProp({
     kind: 'prop', type: 'ЯЩИК', name, mass,
     detail: `${mass.toFixed(1)} КГ · ДЕРЕВО`, description: 'Усиленный деревянный испытательный ящик с металлическими накладками.', range: 4.5,
@@ -771,7 +756,7 @@ function addCrate(name, position, size, mass, hue, yaw = 0) {
   return body;
 }
 function addBarrel(name, position, radius, height, mass, matIndex, yaw = 0) {
-  const visual = createBarrelVisual(radius, height, matIndex, name);
+  const visual = createBarrelVisual(radius, height, matIndex);
   const shape = new CANNON.Cylinder(radius * 0.9, radius, height, 12);
   return addPhysicsProp({
     kind: 'prop', type: 'БОЧКА', name, mass,
@@ -780,7 +765,7 @@ function addBarrel(name, position, radius, height, mass, matIndex, yaw = 0) {
   }, shape, mass, position, visual, yaw, { angularDamping: 0.23 });
 }
 function addBottle(name, position, matIndex, yaw = 0) {
-  const visual = createBottleVisual(matIndex, name);
+  const visual = createBottleVisual(matIndex);
   const shape = [
     { shape: new CANNON.Cylinder(0.103, 0.103, 0.33, 10), offset: new CANNON.Vec3(0, -0.055, 0) },
     { shape: new CANNON.Cylinder(0.043, 0.043, 0.19, 9), offset: new CANNON.Vec3(0, 0.165, 0) }
@@ -922,7 +907,7 @@ function addFenceArea(centerX, centerZ, width, depth, gateSide = 'south', openin
       const shape = new CANNON.Box(half);
       const offset = new CANNON.Vec3(midpoint.x, baseY + 0.62, midpoint.z);
       const shapeRotation = new CANNON.Quaternion();
-      if (side.axis === 'x') shapeRotation.setFromEuler(0, 0, Math.atan(0.02), 'XYZ');
+      if (side.axis === 'x') shapeRotation.setFromEuler(0, 0, Math.atan2(terrainHeightAt(end.x) - terrainHeightAt(start.x), end.x - start.x), 'XYZ');
       body.addShape(shape, offset, shapeRotation);
     }
   }
@@ -1033,13 +1018,12 @@ function createHipRoofGeometry(width, depth, rise) {
   return geometry;
 }
 
-function addVillageBuilding({ x, z, width, depth, height, label, subtitle = 'ДЕРЕВНЯ / ПОЛИГОН 01', wallMaterial, roofType = 0, roofMaterial = villageRoofMaterials[0], brick = false, windows = 2, chimney = true, accent = '#c5d7d0' }) {
+function addVillageBuilding({ x, z, width, depth, height, wallMaterial, roofType = 0, roofMaterial = villageRoofMaterials[0], brick = false, windows = 2, chimney = true }) {
   const ground = terrainHeightAt(x);
   const foundationHeight = 0.28;
   addBuildingPart([width + 0.45, foundationHeight, depth + 0.45], [x, ground + foundationHeight / 2, z], stoneMaterial);
   const wallY = ground + foundationHeight + height / 2;
-  const walls = addBuildingPart([width, height, depth], [x, wallY, z], wallMaterial, true);
-  walls.userData.structure = label;
+  addBuildingPart([width, height, depth], [x, wallY, z], wallMaterial, true);
   addStaticCollider([x, wallY, z], [width / 2, height / 2, depth / 2]);
   const frontZ = z + depth / 2 + 0.065;
   const doorWidth = Math.min(1.15, width * 0.16);
@@ -1066,19 +1050,12 @@ function addVillageBuilding({ x, z, width, depth, height, label, subtitle = 'Д�
     const roof = new THREE.Mesh(roofGeometry, roofMaterial);
     roof.position.set(x, roofY, z);
     roof.castShadow = true; roof.receiveShadow = true;
-    roof.userData.structure = `${label} / КРЫША`;
     scene.add(roof);
   }
   if (chimney && width < 24) {
     addBuildingPart([0.42, 1.05, 0.42], [x + width * 0.29, roofY + 0.5, z - depth * 0.15], rustMaterial);
     addBuildingPart([0.56, 0.11, 0.56], [x + width * 0.29, roofY + 1.07, z - depth * 0.15], paintedMetalMaterial);
   }
-  const signWidth = Math.min(width * 0.7, Math.max(2.3, label.length * 0.32));
-  const signY = ground + foundationHeight + Math.min(height - 0.45, height * 0.82);
-  addBuildingPart([signWidth, 0.55, 0.1], [x, signY, frontZ + 0.095], fenceWoodMaterial);
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(signWidth - 0.12, 0.44), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(label, subtitle, accent), roughness: 0.83, emissive: 0x161916, emissiveIntensity: 0.12 }));
-  sign.position.set(x, signY, frontZ + 0.153);
-  scene.add(sign);
 }
 
 function addWarehouse(hangar) {
@@ -1101,9 +1078,6 @@ function addWarehouse(hangar) {
     const beamX = x - width / 2 + width * i / panelCount;
     addBuildingPart([0.07, height - 0.25, 0.08], [beamX, ground + 0.35 + height / 2, z + depth / 2 + 0.1], trimMaterial);
   }
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(14, width * 0.45), 1.05), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('МИХТОК', 'АНГАР · СКЛАД', '#d6c29a'), roughness: 0.8 }));
-  sign.position.set(x, ground + 0.35 + height * 0.78, z + depth / 2 + 0.145);
-  scene.add(sign);
 }
 
 function addRoadRibbon(points, width, material, edge = false) {
@@ -1194,12 +1168,6 @@ function addPond() {
     ripple.position.set(pond.x, ground + 0.052, pond.z);
     scene.add(ripple);
   }
-  const signX = pond.x + pond.radiusX + 5;
-  const signZ = pond.z + pond.radiusZ * 0.45;
-  addBuildingPart([0.16, 2.0, 0.16], [signX, ground + 1, signZ], fenceWoodMaterial);
-  const plaque = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 1.2), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(pond.label, 'ЗАПАДНАЯ НИЗИНА · 0 М', '#b5d8d8'), roughness: 0.82 }));
-  plaque.position.set(signX, ground + 1.76, signZ + 0.11);
-  scene.add(plaque);
   for (let i = 0; i < 5; i++) {
     const angle = i * 1.21;
     const x = pond.x + Math.cos(angle) * (pond.radiusX + 2 + i % 2);
@@ -1249,15 +1217,21 @@ function addBusStop() {
   addBuildingPart([6.6, 0.22, 4.3], [stop.x, ground + 2.66, stop.z], villageRoofMaterials[3], false, [0, 0, -0.015]);
   addBuildingPart([4.5, 0.12, 0.54], [stop.x, ground + 0.72, stop.z + 1.1], fenceWoodMaterial);
   addBuildingPart([4.5, 0.12, 0.14], [stop.x, ground + 1.12, stop.z + 1.27], fenceWoodMaterial);
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('ОСТАНОВКА', 'ВОСТОЧНЫЙ ТРАКТ · +4 М', '#d8c392'), roughness: 0.83 }));
-  sign.position.set(stop.x, ground + 1.82, stop.z + 1.74);
-  scene.add(sign);
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.6, 8), paintedMetalMaterial);
-  post.position.set(stop.x + 4.2, ground + 1.8, stop.z - 2.4);
-  scene.add(post);
-  const signPlate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.12), new THREE.MeshStandardMaterial({ color: 0x526c68, roughness: 0.64, metalness: 0.22 }));
-  signPlate.position.set(stop.x + 4.2, ground + 3.9, stop.z - 2.4);
-  scene.add(signPlate);
+}
+
+function addShopFacade(shop) {
+  const ground = terrainHeightAt(shop.x);
+  const canopyY = ground + 3.05;
+  const canopyZ = shop.z + shop.depth / 2 + 0.5;
+  addBuildingPart([7.2, 0.18, 1.2], [shop.x, canopyY, canopyZ], shopAwningMaterials[0]);
+  for (let i = 0; i < 8; i++) {
+    const x = shop.x - 2.8 + i * 0.8;
+    addBuildingPart([0.72, 0.035, 1.14], [x, canopyY + 0.108, canopyZ], shopAwningMaterials[i % 2]);
+  }
+  for (const side of [-1, 1]) {
+    addBuildingPart([0.11, 2.95, 0.12], [shop.x + side * 3.55, ground + 1.48, canopyZ + 0.38], fenceWoodMaterial);
+    addBuildingPart([0.34, 0.22, 0.14], [shop.x + side * 3.55, ground + 2.48, shop.z + shop.depth / 2 + 0.16], shopAwningMaterials[1]);
+  }
 }
 
 function buildVillageWorld() {
@@ -1295,20 +1269,21 @@ function buildVillageWorld() {
       : woodMaterials[Number(lot.id.split('-')[1]) % woodMaterials.length];
     addVillageBuilding({
       x, z, width: lot.houseWidth, depth: lot.houseDepth, height: lot.id.startsWith('S-') ? 3.1 : 2.85,
-      label: lot.id, subtitle: 'ЖИЛОЙ УЧАСТОК', wallMaterial,
+      wallMaterial,
       roofType: lot.roof, roofMaterial: villageRoofMaterials[(lot.roof + Number(lot.id.split('-')[1])) % villageRoofMaterials.length],
       brick: wallMaterial === brickMaterial, windows: lot.houseWidth > 11 ? 2 : 1, chimney: true
     });
   }
   const school = VILLAGE_LAYOUT.school;
   addFenceArea(school.x, school.z, school.width + 12, school.depth + 14, 'east', 3.2);
-  addVillageBuilding({ x: school.x, z: school.z, width: school.width, depth: school.depth, height: 4.8, label: 'ШКОЛА', subtitle: 'СЕЛЬСКАЯ ШКОЛА', wallMaterial: brickMaterial, roofType: 1, roofMaterial: villageRoofMaterials[2], windows: 7, chimney: true, accent: '#d8c8a4' });
+  addVillageBuilding({ x: school.x, z: school.z, width: school.width, depth: school.depth, height: 4.8, wallMaterial: brickMaterial, roofType: 1, roofMaterial: villageRoofMaterials[2], windows: 7, chimney: true });
   const shop = VILLAGE_LAYOUT.shop;
   addFenceArea(shop.x, shop.z, 24, 19, 'north', 3.2);
-  addVillageBuilding({ x: shop.x, z: shop.z, width: shop.width, depth: shop.depth, height: 3.45, label: 'МАГАЗИН', subtitle: 'ПРОДУКТЫ · 08:00–20:00', wallMaterial: woodMaterials[2], roofType: 0, roofMaterial: villageRoofMaterials[1], windows: 2, accent: '#e3d19e' });
+  addVillageBuilding({ x: shop.x, z: shop.z, width: shop.width, depth: shop.depth, height: 3.45, wallMaterial: woodMaterials[2], roofType: 0, roofMaterial: villageRoofMaterials[1], windows: 2 });
+  addShopFacade(shop);
   for (let i = 0; i < VILLAGE_LAYOUT.garages.length; i++) {
     const garage = VILLAGE_LAYOUT.garages[i];
-    addVillageBuilding({ x: garage.x, z: garage.z, width: garage.width, depth: garage.depth, height: 2.8, label: `ГАРАЖ ${i + 1}`, subtitle: 'ЧАСТНЫЙ СЕКТОР', wallMaterial: woodMaterials[i % woodMaterials.length], roofType: i % 4, roofMaterial: villageRoofMaterials[i % villageRoofMaterials.length], windows: 0, chimney: false });
+    addVillageBuilding({ x: garage.x, z: garage.z, width: garage.width, depth: garage.depth, height: 2.8, wallMaterial: woodMaterials[i % woodMaterials.length], roofType: i % 4, roofMaterial: villageRoofMaterials[i % villageRoofMaterials.length], windows: 0, chimney: false });
   }
   addBusStop();
   for (const hangar of VILLAGE_LAYOUT.hangars) {
@@ -1620,6 +1595,90 @@ function buildMannequin(id, origin, colorIndex) {
 
 buildMannequin('D-01', [-135, 0, 212], 0);
 buildMannequin('D-02', [143, 0, -142], 1);
+
+function buildAuntZina() {
+  const location = VILLAGE_LAYOUT.auntZina;
+  const root = new THREE.Group();
+  root.name = 'npc-aunt-zina';
+  root.userData.npcId = 'aunt-zina';
+  root.position.set(location.x, terrainHeightAt(location.x), location.z);
+  root.rotation.y = location.yaw;
+  scene.add(root);
+
+  const coat = new THREE.MeshStandardMaterial({ color: 0x455548, roughness: 0.94 });
+  const coatTrim = new THREE.MeshStandardMaterial({ color: 0x303a31, roughness: 0.9 });
+  const scarf = new THREE.MeshStandardMaterial({ color: 0x9b573b, roughness: 0.88 });
+  const headscarf = new THREE.MeshStandardMaterial({ color: 0x69756f, roughness: 0.96 });
+  const hair = new THREE.MeshStandardMaterial({ color: 0x96988d, roughness: 0.95 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0xd4ad91, roughness: 0.92 });
+  const boots = new THREE.MeshStandardMaterial({ color: 0x292c28, roughness: 0.83 });
+  const faceDetail = new THREE.MeshStandardMaterial({ color: 0x39332e, roughness: 0.8 });
+  const button = new THREE.MeshStandardMaterial({ color: 0xd4b478, roughness: 0.68, metalness: 0.16 });
+  const part = (geometry, material, position, parent = root) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(...position);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  };
+
+  // Heavy winter coat, long skirt hem, sleeves, mittens and boots.
+  part(new THREE.CylinderGeometry(0.19, 0.31, 0.62, 9), coat, [0, 0.51, 0]);
+  part(new THREE.BoxGeometry(0.52, 0.57, 0.34), coat, [0, 1.055, 0]);
+  part(new THREE.BoxGeometry(0.5, 0.035, 0.36), coatTrim, [0, 0.84, 0]);
+  for (const side of [-1, 1]) {
+    const sleeve = part(new THREE.CapsuleGeometry(0.078, 0.35, 4, 8), coat, [side * 0.29, 1.0, 0.015]);
+    sleeve.rotation.z = side * -0.11;
+    part(new THREE.SphereGeometry(0.078, 10, 8), scarf, [side * 0.32, 0.7, 0.035]);
+    const boot = part(new THREE.BoxGeometry(0.16, 0.2, 0.32), boots, [side * 0.13, 0.11, 0.035]);
+    boot.rotation.y = -0.05;
+  }
+  for (const y of [1.12, 0.94, 0.76]) part(new THREE.SphereGeometry(0.024, 8, 6), button, [0, y, 0.176]);
+  part(new THREE.CylinderGeometry(0.115, 0.13, 0.14, 9), scarf, [0, 1.39, 0]);
+
+  const head = new THREE.Group();
+  head.name = 'aunt-zina-head';
+  head.userData.npcPart = 'head';
+  head.position.set(0, 1.59, 0.005);
+  root.add(head);
+  const headShape = part(new THREE.SphereGeometry(0.18, 14, 10), skin, [0, 0, 0], head);
+  headShape.scale.set(0.86, 1.0, 0.83);
+  part(new THREE.SphereGeometry(0.205, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), headscarf, [0, 0.055, -0.012], head);
+  for (const side of [-1, 1]) {
+    part(new THREE.SphereGeometry(0.061, 9, 7), hair, [side * 0.145, -0.035, -0.015], head);
+    part(new THREE.SphereGeometry(0.018, 8, 6), faceDetail, [side * 0.052, 0.02, 0.137], head);
+    const brow = part(new THREE.BoxGeometry(0.045, 0.008, 0.008), hair, [side * 0.052, 0.051, 0.139], head);
+    brow.rotation.z = side * -0.08;
+  }
+  part(new THREE.SphereGeometry(0.026, 8, 6), skin, [0, -0.005, 0.155], head);
+  part(new THREE.BoxGeometry(0.052, 0.009, 0.01), faceDetail, [0, -0.072, 0.136], head);
+  const scarfTail = part(new THREE.BoxGeometry(0.16, 0.2, 0.035), scarf, [0.12, 1.3, -0.12]);
+  scarfTail.rotation.z = -0.12;
+  return { root, head, homeX: root.position.x, homeY: root.position.y, homeZ: root.position.z, bodyYaw: location.yaw };
+}
+
+function updateAuntZinaAI(dt) {
+  const dx = playerBody.position.x - auntZina.root.position.x;
+  const dz = playerBody.position.z - auntZina.root.position.z;
+  const distance = Math.hypot(dx, dz);
+  let targetYaw = Math.sin(elapsed * 0.32) * 0.18;
+  let targetPitch = 0;
+  if (distance < 42) {
+    let relativeYaw = Math.atan2(dx, dz) - auntZina.bodyYaw;
+    while (relativeYaw > Math.PI) relativeYaw -= Math.PI * 2;
+    while (relativeYaw < -Math.PI) relativeYaw += Math.PI * 2;
+    targetYaw = THREE.MathUtils.clamp(relativeYaw, -1.0, 1.0);
+    const playerHeadY = playerBody.position.y + 0.62;
+    targetPitch = THREE.MathUtils.clamp(-Math.atan2(playerHeadY - (auntZina.root.position.y + auntZina.head.position.y), Math.max(0.1, distance)), -0.22, 0.22);
+  }
+  let yawDelta = targetYaw - auntZina.head.rotation.y;
+  while (yawDelta > Math.PI) yawDelta -= Math.PI * 2;
+  while (yawDelta < -Math.PI) yawDelta += Math.PI * 2;
+  const smoothing = Math.min(1, Math.max(0, dt) * 4.2);
+  auntZina.head.rotation.y += yawDelta * smoothing;
+  auntZina.head.rotation.x += (targetPitch - auntZina.head.rotation.x) * smoothing;
+}
 
 const MANNEQUIN_KNEELING_POSE = {
   pelvis: [0, 0.84, 0, 0.08, 0, 0],
@@ -2005,6 +2064,8 @@ playerBody.addShape(new CANNON.Sphere(0.31), new CANNON.Vec3(0, 0.53, 0));
 playerBody.addShape(new CANNON.Sphere(0.31), new CANNON.Vec3(0, -0.53, 0));
 playerBody.gameMeta = { kind: 'player' };
 world.addBody(playerBody);
+const auntZina = buildAuntZina();
+let sprintHeld = false;
 let playerFallArmed = false;
 let playerFallPeakY = playerStart.y;
 let playerMaxFallSpeed = 0;
@@ -3553,6 +3614,7 @@ function setInventoryOpen(open) {
     fireHeld = false;
     firePointerId = null;
     resetJoystick();
+    resetSprint();
     if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
     updateInventoryUI();
     resizeInventoryPreview();
@@ -3572,6 +3634,7 @@ function setMenuOpen(open) {
     fireHeld = false;
     firePointerId = null;
     resetJoystick();
+    resetSprint();
     keys.clear();
     toastTimer = 0;
     $('toast').classList.remove('visible');
@@ -3765,8 +3828,8 @@ function updatePlayer(dt) {
   }
   const length = Math.hypot(strafe, forward);
   if (length > 1) { strafe /= length; forward /= length; }
-  const sprinting = !inventoryOpen && (keys.has('ShiftLeft') || keys.has('ShiftRight') || Math.hypot(joystick.x, joystick.y) > 0.84);
-  const speed = movementSpeedWithSnow(sprinting ? 5.25 : 3.8, carriedSnow);
+  const sprinting = !inventoryOpen && (sprintHeld || keys.has('ShiftLeft') || keys.has('ShiftRight') || Math.hypot(joystick.x, joystick.y) > 0.84);
+  const speed = movementSpeedWithSnow(sprinting ? PLAYER_SPRINT_SPEED : PLAYER_WALK_SPEED, carriedSnow);
   const dx = -Math.sin(yaw) * forward + Math.cos(yaw) * strafe;
   const dz = -Math.cos(yaw) * forward - Math.sin(yaw) * strafe;
   const smoothing = Math.min(1, dt * (length > 0.02 ? 13 : 17));
@@ -3930,6 +3993,7 @@ function animate(time) {
     }
   }
   updateMannequinAI(dt);
+  updateAuntZinaAI(dt);
   world.step(1 / 60, dt, 4);
   updatePlayerFallDamage();
   if (pendingDeathRelease) {
@@ -3964,6 +4028,25 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 120), { pa
 
 const joystickRoot = $('joystick');
 const joystickKnob = $('joystick-knob');
+const sprintButton = $('sprint-button');
+let sprintPointerId = null;
+function resetSprint() {
+  sprintHeld = false;
+  sprintPointerId = null;
+  sprintButton.setAttribute('aria-pressed', 'false');
+}
+sprintButton.addEventListener('pointerdown', (event) => {
+  if (!started || dead || menuOpen || inventoryOpen) return;
+  event.preventDefault();
+  event.stopPropagation();
+  sprintPointerId = event.pointerId;
+  sprintHeld = true;
+  sprintButton.setAttribute('aria-pressed', 'true');
+  try { sprintButton.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is optional. */ }
+});
+sprintButton.addEventListener('pointerup', (event) => { if (event.pointerId === sprintPointerId) resetSprint(); });
+sprintButton.addEventListener('pointercancel', resetSprint);
+sprintButton.addEventListener('lostpointercapture', resetSprint);
 function setJoystick(clientX, clientY) {
   const ringRect = joystickRoot.getBoundingClientRect();
   const cx = ringRect.left + ringRect.width / 2;
@@ -4146,8 +4229,8 @@ document.addEventListener('keyup', (event) => {
   keys.delete(event.code);
   if (event.code === 'Space') fireHeld = false;
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); lookState = null; fireHeld = false; firePointerId = null; } });
-window.addEventListener('blur', () => { keys.clear(); fireHeld = false; firePointerId = null; resetJoystick(); }, { passive: true });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); resetSprint(); lookState = null; fireHeld = false; firePointerId = null; } });
+window.addEventListener('blur', () => { keys.clear(); fireHeld = false; firePointerId = null; resetJoystick(); resetSprint(); }, { passive: true });
 
 updateAmmoHUD();
 updateHealthHUD();
