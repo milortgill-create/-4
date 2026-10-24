@@ -81,3 +81,6 @@ jobs:
               --title "POLYGON 01 — Android APK" \
               --notes-file .github/release-notes.md
           fi
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "POLYGON 01 — v1.6.0 «Снежный двор»" \
+            --notes-file .github/release-notes.md

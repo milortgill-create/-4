@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
+import { scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
+
+const isMeleeWeapon = (weapon) => weapon?.type === 'melee' || weapon?.type === 'tool';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -23,8 +26,8 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x10181b);
-scene.fog = new THREE.FogExp2(0x10181b, 0.018);
+scene.background = new THREE.Color(0x87979b);
+scene.fog = new THREE.FogExp2(0x87979b, 0.018);
 const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.06, 70);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
@@ -59,6 +62,8 @@ const raycastTargets = [];
 const bulletSurfaceTargets = [];
 const bulletMarks = [];
 const mannequins = [];
+const snowDrifts = [];
+let floorSurfaceMesh = null;
 const color = (hex) => new THREE.Color(hex);
 
 function seededRandom(seed) {
@@ -94,6 +99,43 @@ function makeConcreteTexture(base, seed, repeatX, repeatY) {
     ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (random() - 0.5) * 42, y + random() * 18); ctx.stroke();
   }
   const texture = new THREE.CanvasTexture(ctxCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(repeatX, repeatY);
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  return texture;
+}
+
+function makeSnowTexture(base, seed, repeatX, repeatY) {
+  const size = 512;
+  const snowCanvas = document.createElement('canvas');
+  snowCanvas.width = snowCanvas.height = size;
+  const ctx = snowCanvas.getContext('2d', { willReadFrequently: true });
+  const rgb = [parseInt(base.slice(1, 3), 16), parseInt(base.slice(3, 5), 16), parseInt(base.slice(5, 7), 16)];
+  const random = seededRandom(seed);
+  const image = ctx.createImageData(size, size);
+  for (let i = 0; i < image.data.length; i += 4) {
+    const grain = (random() - 0.5) * 20;
+    image.data[i] = Math.max(0, Math.min(255, rgb[0] + grain - 2));
+    image.data[i + 1] = Math.max(0, Math.min(255, rgb[1] + grain));
+    image.data[i + 2] = Math.max(0, Math.min(255, rgb[2] + grain + 4));
+    image.data[i + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+  for (let i = 0; i < 95; i++) {
+    const x = random() * size, y = random() * size;
+    const radius = 8 + random() * 48;
+    ctx.fillStyle = random() > 0.55 ? 'rgba(126,157,166,.075)' : 'rgba(255,255,255,.11)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, radius * (0.8 + random() * 0.8), radius * (0.25 + random() * 0.48), random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 520; i++) {
+    const x = random() * size, y = random() * size;
+    ctx.fillStyle = random() > 0.58 ? 'rgba(102,136,148,.22)' : 'rgba(255,255,255,.68)';
+    ctx.fillRect(x, y, 1 + random() * 2.2, 1 + random() * 1.4);
+  }
+  const texture = new THREE.CanvasTexture(snowCanvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(repeatX, repeatY);
@@ -156,19 +198,23 @@ function makeCanvasLabel(topLine, bottomLine, accent = '#9bdac1') {
   return texture;
 }
 
-const wallTexture = makeConcreteTexture('#50595a', 19, 2, 1.6);
-const floorTexture = makeConcreteTexture('#434b4b', 81, 3.2, 2.5);
-const ceilingTexture = makeConcreteTexture('#30393b', 41, 2.5, 2.2);
+const wallTexture = makeWoodTexture('#775a3d', 319);
+wallTexture.repeat.set(5.4, 1.8);
+const floorTexture = makeSnowTexture('#e2e9e9', 81, 4.6, 3.5);
+const ceilingTexture = makeWoodTexture('#51402d', 441);
+ceilingTexture.repeat.set(4.2, 1.8);
 const wallBumpTexture = wallTexture.clone(); wallBumpTexture.colorSpace = THREE.NoColorSpace;
 const floorBumpTexture = floorTexture.clone(); floorBumpTexture.colorSpace = THREE.NoColorSpace;
 const ceilingBumpTexture = ceilingTexture.clone(); ceilingBumpTexture.colorSpace = THREE.NoColorSpace;
-const concreteWall = new THREE.MeshStandardMaterial({ map: wallTexture, bumpMap: wallBumpTexture, bumpScale: 0.065, color: 0xc8ceca, roughness: 0.96, metalness: 0.02 });
-const concreteFloor = new THREE.MeshStandardMaterial({ map: floorTexture, bumpMap: floorBumpTexture, bumpScale: 0.048, color: 0xc4ccca, roughness: 0.98, metalness: 0.02 });
-const concreteCeiling = new THREE.MeshStandardMaterial({ map: ceilingTexture, bumpMap: ceilingBumpTexture, bumpScale: 0.032, color: 0xaab3b1, roughness: 0.96 });
+const concreteWall = new THREE.MeshStandardMaterial({ map: wallTexture, bumpMap: wallBumpTexture, bumpScale: 0.045, color: 0xffffff, roughness: 0.94, metalness: 0.01 });
+const concreteFloor = new THREE.MeshStandardMaterial({ map: floorTexture, bumpMap: floorBumpTexture, bumpScale: 0.025, color: 0xf1f5f4, roughness: 0.98, metalness: 0 });
+const concreteCeiling = new THREE.MeshStandardMaterial({ map: ceilingTexture, bumpMap: ceilingBumpTexture, bumpScale: 0.035, color: 0xc5b192, roughness: 0.96 });
 const darkConcrete = new THREE.MeshStandardMaterial({ color: 0x303a3c, roughness: 0.9 });
-const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1b2528, roughness: 0.72, metalness: 0.28 });
+const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x342d25, roughness: 0.72, metalness: 0.18 });
 const warningMaterial = new THREE.MeshStandardMaterial({ color: 0xd5aa55, roughness: 0.8, metalness: 0.06 });
 const whiteMarkMaterial = new THREE.MeshStandardMaterial({ color: 0xc1ccc5, roughness: 0.9, emissive: 0x18201c, emissiveIntensity: 0.15 });
+const barnBeamMaterial = new THREE.MeshStandardMaterial({ color: 0x4b3828, roughness: 0.9 });
+const snowMaterial = new THREE.MeshStandardMaterial({ color: 0xf4f7f7, roughness: 0.96, metalness: 0, bumpMap: floorBumpTexture, bumpScale: 0.018 });
 
 scene.add(new THREE.HemisphereLight(0xbdd1d0, 0x282523, 1.1));
 scene.add(new THREE.AmbientLight(0x7d9291, 0.48));
@@ -242,6 +288,8 @@ function addStaticCollider(position, halfExtents, material = floorPhysicsMateria
 
 function addRoom() {
   const floor = addStaticBoxMesh(new THREE.BoxGeometry(18, 0.5, 14), concreteFloor, [0, -0.25, 0], { bulletSurface: true });
+  floorSurfaceMesh = floor;
+  floor.userData.groundSurface = true;
   floor.receiveShadow = true;
   addStaticCollider([0, -0.25, 0], [9, 0.25, 7]);
 
@@ -254,35 +302,28 @@ function addRoom() {
     addStaticCollider([0, 3, side * 7], [9, 3, 0.2]);
   }
 
-  // Wall pilasters, service trunks and lower impact guards add scale to the empty concrete chamber.
-  for (const x of [-8.25, 8.25]) {
-    for (const z of [-5.85, 0, 5.85]) {
-      addStaticBoxMesh(new THREE.BoxGeometry(0.42, 5.8, 0.42), darkConcrete, [x, 2.9, z]);
-      addStaticBoxMesh(new THREE.BoxGeometry(0.5, 0.11, 0.5), trimMaterial, [x, 0.12, z]);
+  // Dark timber posts and rails frame the shed walls without covering their plank texture.
+  for (const side of [-1, 1]) {
+    for (const z of [-6.65, -3.3, 0, 3.3, 6.65]) {
+      addStaticBoxMesh(new THREE.BoxGeometry(0.24, 6.05, 0.25), barnBeamMaterial, [side * 8.76, 3, z]);
+    }
+    for (const y of [0.18, 1.86, 3.54, 5.82]) {
+      addStaticBoxMesh(new THREE.BoxGeometry(0.2, 0.17, 13.7), barnBeamMaterial, [side * 8.76, y, 0]);
     }
   }
-  for (const z of [-6.72, 6.72]) addStaticBoxMesh(new THREE.BoxGeometry(17.6, 0.2, 0.12), warningMaterial, [0, 0.13, z], { castShadow: false });
-  for (const x of [-8.72, 8.72]) addStaticBoxMesh(new THREE.BoxGeometry(0.12, 0.2, 13.7), warningMaterial, [x, 0.13, 0], { castShadow: false });
-
-  // Floor test lanes and serial markings.
-  for (const x of [-5.6, -2.8, 0, 2.8, 5.6]) {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.012, 10.8), whiteMarkMaterial);
-    stripe.position.set(x, 0.008, -0.1); scene.add(stripe);
+  for (const side of [-1, 1]) {
+    for (const x of [-8.65, 0, 8.65]) {
+      addStaticBoxMesh(new THREE.BoxGeometry(0.25, 6.05, 0.24), barnBeamMaterial, [x, 3, side * 6.76]);
+    }
+    for (const y of [0.18, 1.86, 3.54, 5.82]) {
+      addStaticBoxMesh(new THREE.BoxGeometry(17.35, 0.17, 0.2), barnBeamMaterial, [0, y, side * 6.76]);
+    }
   }
-  for (const z of [-5.3, -2.65, 0, 2.65, 5.3]) {
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(16.8, 0.012, 0.022), whiteMarkMaterial);
-    stripe.position.set(0, 0.009, z); scene.add(stripe);
-  }
-  const bayLabel = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.75), new THREE.MeshBasicMaterial({ map: makeCanvasLabel('TEST BAY 01', 'IMPACT / MASS / JOINTS'), transparent: false, toneMapped: false }));
-  bayLabel.rotation.x = -Math.PI / 2;
-  bayLabel.position.set(0, 0.012, -6.15);
-  bayLabel.receiveShadow = false;
-  scene.add(bayLabel);
 
-  const wallSign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 1.16), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('PHYSICS LAB', 'CONCRETE TEST CHAMBER'), roughness: 0.8, metalness: 0.1, emissive: 0x12201d, emissiveIntensity: 0.3 }));
+  const wallSign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 1.16), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('СНЕЖНЫЙ ДВОР', 'ПОЛИГОН ВЫЖИВАНИЯ', '#c8dfd8'), roughness: 0.84, metalness: 0.04, emissive: 0x18201d, emissiveIntensity: 0.18 }));
   wallSign.position.set(0, 4.4, -6.785);
   scene.add(wallSign);
-  const dataPlate = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 0.48), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('SECTOR 01', 'OFFLINE SIMULATION', '#d9b46d'), roughness: 0.8, emissive: 0x17140e, emissiveIntensity: 0.25 }));
+  const dataPlate = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 0.52), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('ЗИМНИЙ САРАЙ', 'OFFLINE / 01', '#d9b46d'), roughness: 0.84, emissive: 0x17140e, emissiveIntensity: 0.2 }));
   dataPlate.position.set(8.785, 3.9, -1.4);
   dataPlate.rotation.y = -Math.PI / 2;
   scene.add(dataPlate);
@@ -325,7 +366,43 @@ function tagVisual(root, meta) {
       child.userData.gameMeta = meta;
     }
   });
+  root.userData.gameMeta = meta;
   raycastTargets.push(root);
+}
+
+function updateSnowDriftVisual(drift) {
+  const amount = Math.max(0, drift.amount);
+  const scale = Math.cbrt(amount);
+  drift.meta.isEmpty = amount <= 0.012;
+  drift.group.visible = !drift.meta.isEmpty;
+  drift.group.scale.setScalar(scale);
+  drift.group.position.y = 0.02 + 0.07 * scale;
+}
+
+function createSnowDrift(x, z, amount = 1) {
+  const group = new THREE.Group();
+  const mound = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), snowMaterial);
+  mound.scale.set(0.88, 0.38, 0.76);
+  mound.position.set(0, 0.31, 0);
+  group.add(mound);
+  for (const [px, py, pz, sx, sy, sz] of [
+    [-0.37, 0.18, 0.08, 0.45, 0.25, 0.48],
+    [0.34, 0.17, -0.1, 0.48, 0.23, 0.44],
+    [0.04, 0.24, 0.35, 0.43, 0.27, 0.38]
+  ]) {
+    const lobe = new THREE.Mesh(new THREE.IcosahedronGeometry(0.68, 1), snowMaterial);
+    lobe.position.set(px, py, pz);
+    lobe.scale.set(sx, sy, sz);
+    group.add(lobe);
+  }
+  group.position.set(x, 0, z);
+  const meta = { kind: 'snowdrift', name: 'СУГРОБ', range: 4.5, isEmpty: false };
+  const drift = { group, amount: Math.max(0, amount), meta };
+  meta.drift = drift;
+  tagVisual(group, meta);
+  snowDrifts.push(drift);
+  updateSnowDriftVisual(drift);
+  return drift;
 }
 
 function addPhysicsProp(meta, shape, mass, position, visual, yaw = 0, extra = {}) {
@@ -521,6 +598,30 @@ function addShovel(name, position, yaw = 0) {
     inventoryWidth: 2, inventoryHeight: 3, inventoryIcon: '⚒'
   }, new CANNON.Box(new CANNON.Vec3(0.64, 0.07, 0.2)), 3.6, position, visual, yaw, { angularDamping: 0.3 });
 }
+function createFirewoodVisual() {
+  const group = new THREE.Group();
+  const bark = new THREE.MeshStandardMaterial({ map: woodMaps[1], bumpMap: woodBumpMaps[1], bumpScale: 0.025, color: 0x72573a, roughness: 0.96 });
+  const cut = new THREE.MeshStandardMaterial({ color: 0xc0a17a, roughness: 0.96 });
+  const log = new THREE.Mesh(new THREE.CylinderGeometry(0.083, 0.09, 0.66, 10), bark);
+  log.rotation.z = Math.PI / 2;
+  group.add(log);
+  for (const side of [-1, 1]) {
+    const end = new THREE.Mesh(new THREE.CircleGeometry(0.082, 10), cut);
+    end.position.x = side * 0.331;
+    end.rotation.y = side * Math.PI / 2;
+    group.add(end);
+  }
+  return group;
+}
+function addFirewood(name, position, yaw = 0) {
+  const mass = 1.35;
+  const visual = createFirewoodVisual();
+  return addPhysicsProp({
+    kind: 'firewood', type: 'ДРОВА', name, mass,
+    detail: `${mass.toFixed(1)} КГ · СУХОЕ ПОЛЕНО`, description: 'Полено для растопки кирпичной печи. Возьмите его и используйте действие рядом с печью.', range: 4.5,
+    inventoryWidth: 1, inventoryHeight: 2, inventoryIcon: '▤'
+  }, new CANNON.Box(new CANNON.Vec3(0.34, 0.09, 0.09)), mass, position, visual, yaw, { angularDamping: 0.28 });
+}
 
 // Fixed masses, starting positions and footprints keep every prop clear of the floor and one another.
 addCrate('ЯЩИК A-01', [-3.55, 0.42, -1.0], [0.86, 0.84, 0.78], 7.5, 0x756044, -0.08);
@@ -541,6 +642,104 @@ addPlank('ДОСКА P-02', [-0.2, 0.09, -4.35], 2.0, 0.32, 0.16, 3.1, -0.33);
 addPlank('ДОСКА P-03', [0.85, 0.075, 1.05], 2.7, 0.4, 0.13, 4.2, 0.52);
 addPlank('ДОСКА P-04', [6.15, 0.08, 2.2], 2.15, 0.3, 0.14, 3.0, -0.13);
 addShovel('ЛОПАТА S-01', [-5.55, 0.07, 2.7], -0.25);
+addFirewood('ДРОВА F-01', [6.15, 0.1, -4.1], 0.18);
+addFirewood('ДРОВА F-02', [6.78, 0.1, -4.22], -0.36);
+addFirewood('ДРОВА F-03', [5.82, 0.1, -4.52], 0.46);
+addFirewood('ДРОВА F-04', [6.22, 0.1, -3.72], -0.2);
+
+createSnowDrift(-5.05, 1.55, 1);
+createSnowDrift(0.15, 2.7, 0.92);
+createSnowDrift(-6.35, -3.85, 1);
+createSnowDrift(5.6, 3.75, 0.88);
+
+const stovePosition = new THREE.Vector3(7.15, 0, -5.35);
+const fireParticles = [];
+let fireRoot = null;
+let stoveGroup = null;
+let stoveDoorGlow = null;
+let stoveLight = null;
+let stoveLit = false;
+let stoveFuel = 0;
+let stoveCrackleTimer = 0;
+let carriedSnow = 0;
+let shovelActionTimer = 0;
+const SHOVEL_ACTION_DURATION = 0.82;
+let shovelAction = null;
+let snowPayload = null;
+
+function buildStove() {
+  const brickMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0x7a3828, roughness: 0.95 }),
+    new THREE.MeshStandardMaterial({ color: 0x8b4430, roughness: 0.94 }),
+    new THREE.MeshStandardMaterial({ color: 0x633126, roughness: 0.96 })
+  ];
+  const stoveIron = new THREE.MeshStandardMaterial({ color: 0x262b29, roughness: 0.62, metalness: 0.62 });
+  const stoveGroupRoot = new THREE.Group();
+  stoveGroupRoot.position.copy(stovePosition);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.28, 1.0, 1.06), brickMaterials[0]);
+  body.position.y = 0.5;
+  stoveGroupRoot.add(body);
+  for (let row = 0; row < 5; row++) {
+    for (let column = 0; column < 4; column++) {
+      const offset = row % 2 ? 0.14 : 0;
+      const brick = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.16, 0.045), brickMaterials[(row * 3 + column) % brickMaterials.length]);
+      brick.position.set(-0.47 + column * 0.29 + offset, 0.13 + row * 0.18, 0.54);
+      stoveGroupRoot.add(brick);
+    }
+  }
+  const opening = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.39, 0.035), stoveIron);
+  opening.position.set(0, 0.48, 0.591);
+  stoveGroupRoot.add(opening);
+  const inner = new THREE.Mesh(new THREE.BoxGeometry(0.43, 0.25, 0.014), new THREE.MeshStandardMaterial({ color: 0x110e0b, roughness: 1, emissive: 0x0c0703 }));
+  inner.position.set(0, 0.48, 0.616);
+  stoveGroupRoot.add(inner);
+  stoveDoorGlow = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.22, 0.008), new THREE.MeshBasicMaterial({ color: 0xff7b2c, transparent: true, opacity: 0.86 }));
+  stoveDoorGlow.position.set(0, 0.48, 0.628);
+  stoveDoorGlow.visible = false;
+  stoveGroupRoot.add(stoveDoorGlow);
+  for (const x of [-0.34, 0.34]) {
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.5, 0.075), stoveIron);
+    edge.position.set(x, 0.48, 0.64);
+    stoveGroupRoot.add(edge);
+  }
+  for (const y of [0.24, 0.72]) {
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.06, 0.075), stoveIron);
+    edge.position.set(0, y, 0.64);
+    stoveGroupRoot.add(edge);
+  }
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.16, 0.045), stoveIron);
+  handle.position.set(0.25, 0.48, 0.69);
+  stoveGroupRoot.add(handle);
+  const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.62, 0.44), brickMaterials[2]);
+  chimney.position.set(0.32, 1.78, -0.24);
+  stoveGroupRoot.add(chimney);
+  const chimneyCap = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.1, 0.57), stoveIron);
+  chimneyCap.position.set(0.32, 2.64, -0.24);
+  stoveGroupRoot.add(chimneyCap);
+  scene.add(stoveGroupRoot);
+  const stoveMeta = { kind: 'stove', name: 'КИРПИЧНАЯ ПЕЧЬ', range: 4.7 };
+  tagVisual(stoveGroupRoot, stoveMeta);
+  stoveGroup = stoveGroupRoot;
+  addStaticCollider([stovePosition.x, 0.5, stovePosition.z], [0.66, 0.5, 0.55]);
+  addStaticCollider([stovePosition.x + 0.32, 1.78, stovePosition.z - 0.24], [0.21, 0.81, 0.22]);
+
+  fireRoot = new THREE.Group();
+  fireRoot.position.set(stovePosition.x, 0, stovePosition.z + 0.66);
+  fireRoot.visible = false;
+  scene.add(fireRoot);
+  const flameColors = [0xff5722, 0xff8b27, 0xffc34e, 0xffe08a];
+  for (let i = 0; i < 13; i++) {
+    const material = new THREE.MeshBasicMaterial({ color: flameColors[i % flameColors.length], transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+    const particle = new THREE.Mesh(new THREE.TetrahedronGeometry(0.1 + (i % 3) * 0.025, 0), material);
+    particle.visible = false;
+    fireRoot.add(particle);
+    fireParticles.push({ mesh: particle, phase: Math.random() * Math.PI * 2, rate: 1.35 + Math.random() * 1.45, spread: 0.03 + Math.random() * 0.11 });
+  }
+  stoveLight = new THREE.PointLight(0xff8738, 0, 5.3, 2);
+  stoveLight.position.set(stovePosition.x, 0.92, stovePosition.z + 0.92);
+  scene.add(stoveLight);
+}
+buildStove();
 
 const dummySkinMaterials = [
   new THREE.MeshStandardMaterial({ color: 0xa6b8b6, roughness: 0.73, metalness: 0.14 }),
@@ -1128,7 +1327,7 @@ let fireHeld = false;
 let meleeTimer = 0;
 let meleeHitApplied = false;
 let shotgunPumpTimer = 0;
-let currentWeaponId = 'ak-47';
+let currentWeaponId = null;
 const weaponAmmo = new Map(WEAPON_CATALOG.map((weapon) => [weapon.id, createAmmoState(weapon)]));
 let gunAudioContext = null;
 let gunNoiseBuffer = null;
@@ -1187,6 +1386,7 @@ function clearWeaponModel() {
   weaponModel.clear();
   magazineGroup = null;
   pumpGroup = null;
+  snowPayload = null;
 }
 
 function buildAK47Model() {
@@ -1355,6 +1555,19 @@ function buildMeleeModel(weapon) {
     weaponBox(weaponModel, [0.11, 0.23, 0.24], [-0.18, 0.02, -0.64], weaponBlack);
     weaponBox(weaponModel, [0.11, 0.23, 0.24], [0.18, 0.02, -0.64], weaponBlack);
     weaponBox(weaponModel, [0.26, 0.035, 0.235], [0, 0.135, -0.64], weaponSteelLight);
+  } else if (weapon.model === 'shovel') {
+    weaponCylinder(weaponModel, 0.029, 0.98, [0, -0.005, -0.12], weaponWood, 10);
+    weaponCylinder(weaponModel, 0.04, 0.25, [0, 0.0, 0.28], weaponGrip, 9);
+    weaponBox(weaponModel, [0.11, 0.07, 0.075], [0, -0.005, -0.36], weaponSteel);
+    weaponBox(weaponModel, [0.31, 0.045, 0.32], [0, -0.035, -0.59], weaponSteelLight, [0.08, 0, 0]);
+    weaponBox(weaponModel, [0.29, 0.018, 0.075], [0, -0.006, -0.69], weaponBlade, [0.08, 0, 0]);
+    weaponBox(weaponModel, [0.035, 0.024, 0.035], [0, 0.015, -0.43], weaponBlack);
+    snowPayload = new THREE.Mesh(new THREE.IcosahedronGeometry(0.12, 1), snowMaterial);
+    snowPayload.scale.set(1.15, 0.62, 1.45);
+    snowPayload.position.set(0, 0.006, -0.57);
+    snowPayload.rotation.set(0.18, 0.2, -0.12);
+    snowPayload.visible = carriedSnow > 0;
+    weaponModel.add(snowPayload);
   } else {
     weaponCylinder(weaponModel, 0.058, 0.88, [0, -0.005, -0.17], weaponWood, 9);
     weaponCylinder(weaponModel, 0.045, 0.28, [0, -0.01, 0.33], weaponGrip, 8);
@@ -1388,12 +1601,12 @@ function setHandTarget(which, palmTarget) {
 
 function buildWeaponModel(weapon) {
   clearWeaponModel();
-  if (weapon.type === 'melee') buildMeleeModel(weapon);
+  if (isMeleeWeapon(weapon)) buildMeleeModel(weapon);
   else if (weapon.model === 'ak') buildAK47Model();
   else if (weapon.model === 'm4') buildM4A1Model();
   else if (weapon.type === 'pistol') buildPistolModel(weapon);
   else if (weapon.type === 'shotgun') buildShotgunModel();
-  const cameraPose = weapon.type === 'melee'
+  const cameraPose = isMeleeWeapon(weapon)
     ? { position: [0.29, -0.34, -0.82], rotation: [0.2, 0.22, 0.04], left: [-0.08, -0.10, -0.055], right: [0.07, -0.105, 0.18] }
     : weapon.type === 'pistol'
       ? { position: [0.3, -0.39, -0.69], rotation: [0.18, 0.22, 0.02], left: [-0.045, -0.14, 0.17], right: [0.035, -0.105, 0.15] }
@@ -1406,14 +1619,15 @@ function buildWeaponModel(weapon) {
   weaponView.rotation.copy(weaponBaseRotation);
   setHandTarget('left', cameraPose.left);
   setHandTarget('right', cameraPose.right);
-  const muzzleZ = weapon.type === 'pistol' ? -0.43 : weapon.type === 'shotgun' ? -1.38 : weapon.type === 'melee' ? 0 : -1.09;
+  const muzzleZ = weapon.type === 'pistol' ? -0.43 : weapon.type === 'shotgun' ? -1.38 : isMeleeWeapon(weapon) ? 0 : -1.09;
   muzzleFlash.position.set(0, weapon.type === 'shotgun' ? 0.052 : 0.025, muzzleZ);
   muzzleFlash.visible = false;
+  if (snowPayload) snowPayload.visible = carriedSnow > 0;
   weaponModel.visible = true;
 }
 
-function currentWeapon() { return WEAPON_BY_ID.get(currentWeaponId) || WEAPON_BY_ID.get('ak-47'); }
-function currentWeaponAmmo() { return weaponAmmo.get(currentWeaponId); }
+function currentWeapon() { return WEAPON_BY_ID.get(currentWeaponId) || null; }
+function currentWeaponAmmo() { return currentWeaponId ? weaponAmmo.get(currentWeaponId) || null : null; }
 function equipWeapon(id, announce = true) {
   const weapon = WEAPON_BY_ID.get(id);
   if (!weapon) return false;
@@ -1424,6 +1638,8 @@ function equipWeapon(id, announce = true) {
   reloadProgress = 0;
   meleeTimer = 0;
   meleeHitApplied = false;
+  shovelActionTimer = 0;
+  shovelAction = null;
   shotgunPumpTimer = 0;
   weaponRecoil = 0;
   muzzleFlashTimer = 0;
@@ -1490,7 +1706,9 @@ function buildHand(side) {
 buildHand(-1);
 buildHand(1);
 handPose = handTargetPose = 0.78;
-equipWeapon(currentWeaponId, false);
+handGroup.visible = false;
+weaponView.visible = false;
+weaponModel.visible = false;
 function updateHandPose(dt) {
   handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
   for (const rig of fingerRigs) {
@@ -1509,17 +1727,30 @@ function updateHandPose(dt) {
 function updateAmmoHUD() {
   const weapon = currentWeapon();
   const ammo = currentWeaponAmmo();
+  const controls = document.querySelector('.weapon-controls');
+  if (controls) controls.style.display = weapon ? 'block' : 'none';
   const label = $('ammo-count');
-  if (label) label.textContent = weapon.magazineSize === null ? '' : `${ammo.magazine} / ${ammo.reserve}`;
   const fireLabel = $('fire-label');
-  if (fireLabel) fireLabel.textContent = weapon.type === 'melee' ? 'УДАР' : 'ОГОНЬ';
   const fireButton = $('fire-button');
+  const reloadButton = $('reload-button');
+  if (!weapon) {
+    if (label) label.textContent = '';
+    if (fireLabel) fireLabel.textContent = '';
+    if (fireButton) {
+      fireButton.disabled = true;
+      fireButton.setAttribute('aria-label', 'Нет экипированного предмета');
+      fireButton.classList.remove('melee-mode');
+    }
+    if (reloadButton) reloadButton.style.display = 'none';
+    return;
+  }
+  if (label) label.textContent = weapon.magazineSize === null ? '' : `${ammo.magazine} / ${ammo.reserve}`;
+  if (fireLabel) fireLabel.textContent = isMeleeWeapon(weapon) ? 'УДАР' : 'ОГОНЬ';
   if (fireButton) {
     fireButton.disabled = weapon.magazineSize !== null && ammo.magazine <= 0 && ammo.reserve <= 0;
-    fireButton.setAttribute('aria-label', `${weapon.name}: ${weapon.type === 'melee' ? 'удар' : 'огонь'}`);
-    fireButton.classList.toggle('melee-mode', weapon.type === 'melee');
+    fireButton.setAttribute('aria-label', `${weapon.name}: ${isMeleeWeapon(weapon) ? 'удар' : 'огонь'}`);
+    fireButton.classList.toggle('melee-mode', isMeleeWeapon(weapon));
   }
-  const reloadButton = $('reload-button');
   if (reloadButton) reloadButton.style.display = weapon.magazineSize === null ? 'none' : 'grid';
 }
 
@@ -1533,6 +1764,70 @@ function ensureGunAudio() {
   const data = gunNoiseBuffer.getChannelData(0);
   for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
   return gunAudioContext;
+}
+
+function playFireCrackle() {
+  try {
+    const context = ensureGunAudio();
+    if (!context || !gunNoiseBuffer) return;
+    if (context.state === 'suspended') context.resume();
+    const now = context.currentTime;
+    const duration = 0.035 + Math.random() * 0.055;
+    const source = context.createBufferSource();
+    source.buffer = gunNoiseBuffer;
+    const filter = context.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(850 + Math.random() * 1800, now);
+    filter.Q.value = 1.6 + Math.random() * 1.4;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.035 + Math.random() * 0.025, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(context.destination);
+    source.start(now, Math.random() * 0.45, duration);
+    source.stop(now + duration + 0.01);
+  } catch (_) {
+    // The stove and warmth work without audio on WebViews that block Web Audio.
+  }
+}
+
+function updateFireEffects(dt) {
+  if (stoveLit) {
+    stoveFuel = Math.max(0, stoveFuel - dt);
+    if (stoveFuel <= 0) {
+      stoveLit = false;
+      toast('ДРОВА ПРОГОРЕЛИ', 1.0);
+    }
+  }
+  if (fireRoot) fireRoot.visible = stoveLit;
+  if (stoveDoorGlow) stoveDoorGlow.visible = stoveLit;
+  if (stoveLight) stoveLight.intensity = stoveLit ? 2.3 + Math.sin(elapsed * 17) * 0.28 + Math.random() * 0.18 : 0;
+  for (const particle of fireParticles) {
+    if (!stoveLit) {
+      particle.mesh.visible = false;
+      continue;
+    }
+    particle.phase = (particle.phase + dt * particle.rate) % (Math.PI * 2);
+    const t = particle.phase / (Math.PI * 2);
+    particle.mesh.position.set(
+      Math.sin(particle.phase * 2.15) * particle.spread,
+      0.11 + t * 0.54,
+      Math.cos(particle.phase * 1.55) * particle.spread * 0.42
+    );
+    particle.mesh.rotation.set(particle.phase * 0.7, particle.phase * 0.45, particle.phase * 1.1);
+    particle.mesh.scale.set(0.65 + t * 0.48, 0.72 + t * 0.66, 0.62 + t * 0.5);
+    particle.mesh.material.opacity = Math.sin(Math.PI * t) * 0.92;
+    particle.mesh.visible = t < 0.96;
+  }
+  if (stoveLit) {
+    stoveCrackleTimer -= dt;
+    if (stoveCrackleTimer <= 0) {
+      playFireCrackle();
+      stoveCrackleTimer = 0.55 + Math.random() * 1.15;
+    }
+  }
 }
 
 function playWeaponSound(weapon, action = 'fire') {
@@ -1580,7 +1875,7 @@ function playWeaponSound(weapon, action = 'fire') {
 function startReload() {
   const weapon = currentWeapon();
   const ammo = currentWeaponAmmo();
-  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0 || weapon.magazineSize === null) return;
+  if (dead || menuOpen || inventoryOpen || heldBody || !weapon || !ammo || reloadTimer > 0 || weapon.magazineSize === null) return;
   if (ammo.magazine >= weapon.magazineSize) { toast('МАГАЗИН ПОЛОН', 0.85); return; }
   if (ammo.reserve <= 0) { toast('НЕТ ПАТРОНОВ', 0.9); return; }
   fireHeld = false;
@@ -1593,7 +1888,9 @@ function startReload() {
 
 function completeReload() {
   const weapon = currentWeapon();
-  const loaded = reloadAmmo(weapon, currentWeaponAmmo());
+  const ammo = currentWeaponAmmo();
+  if (!weapon || !ammo || weapon.magazineSize === null) return;
+  const loaded = reloadAmmo(weapon, ammo);
   reloadProgress = 1;
   updateAmmoHUD();
   if (loaded > 0) toast('ГОТОВО', 0.65);
@@ -1664,7 +1961,7 @@ function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1) {
       world.broadphase.dirty = true;
     }
     if (part.body.type === CANNON.Body.DYNAMIC) {
-      const force = weapon.type === 'melee' ? 5 + result.damage * 0.25 : 1.8 + result.damage * 0.12;
+      const force = isMeleeWeapon(weapon) ? 5 + result.damage * 0.25 : 1.8 + result.damage * 0.12;
       part.body.applyImpulse(new CANNON.Vec3(direction.x * force, direction.y * force, direction.z * force), new CANNON.Vec3());
     }
     if (result.lethal) {
@@ -1677,7 +1974,7 @@ function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1) {
     return;
   }
   if (meta.kind === 'prop' && meta.body?.type === CANNON.Body.DYNAMIC) {
-    const scale = weapon.type === 'melee' ? 7 : weapon.type === 'shotgun' ? 3.5 : 2.4;
+    const scale = isMeleeWeapon(weapon) ? 7 : weapon.type === 'shotgun' ? 3.5 : 2.4;
     meta.body.applyImpulse(new CANNON.Vec3(direction.x * scale, direction.y * scale, direction.z * scale), new CANNON.Vec3());
     meta.body.wakeUp();
   }
@@ -1706,8 +2003,8 @@ function traceMeleeHit(weapon) {
 function fireWeapon() {
   const weapon = currentWeapon();
   const ammo = currentWeaponAmmo();
-  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0 || fireCooldown > 0) return;
-  if (weapon.type === 'melee') {
+  if (dead || menuOpen || inventoryOpen || heldBody || !weapon || reloadTimer > 0 || fireCooldown > 0 || shovelActionTimer > 0) return;
+  if (isMeleeWeapon(weapon)) {
     if (meleeTimer > 0) return;
     meleeTimer = weapon.swingDuration;
     meleeHitApplied = false;
@@ -1747,6 +2044,13 @@ function updateWeapon(dt) {
   const weapon = currentWeapon();
   fireCooldown = Math.max(0, fireCooldown - dt);
   weaponRecoil = THREE.MathUtils.damp(weaponRecoil, 0, 18, dt);
+  if (!weapon) {
+    fireHeld = false;
+    muzzleFlash.visible = false;
+    weaponModel.visible = false;
+    weaponView.visible = !dead && Boolean(heldBody);
+    return;
+  }
   if (fireHeld && fireCooldown <= 0 && reloadTimer <= 0) fireWeapon();
   if (reloadTimer > 0) {
     reloadTimer = Math.max(0, reloadTimer - dt);
@@ -1760,7 +2064,7 @@ function updateWeapon(dt) {
       muzzleFlash.userData.light.intensity = 0;
     }
   }
-  let reloadMotion = reloadTimer > 0 ? Math.sin(reloadProgress * Math.PI) : 0;
+  const reloadMotion = reloadTimer > 0 ? Math.sin(reloadProgress * Math.PI) : 0;
   if (shotgunPumpTimer > 0) {
     shotgunPumpTimer = Math.max(0, shotgunPumpTimer - dt);
     const pumpProgress = 1 - shotgunPumpTimer / 0.34;
@@ -1768,7 +2072,14 @@ function updateWeapon(dt) {
   } else if (pumpGroup) {
     pumpGroup.position.copy(pumpBasePosition);
   }
-  if (meleeTimer > 0) {
+  if (shovelActionTimer > 0) {
+    const actionProgress = 1 - shovelActionTimer / SHOVEL_ACTION_DURATION;
+    const digging = Math.sin(actionProgress * Math.PI);
+    shovelActionTimer = Math.max(0, shovelActionTimer - dt);
+    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - digging * 0.17, weaponBasePosition.z + digging * 0.16);
+    weaponView.rotation.set(weaponBaseRotation.x + digging * 0.52, weaponBaseRotation.y + digging * 0.04, weaponBaseRotation.z - digging * 0.12);
+    if (shovelActionTimer === 0) finishSnowAction();
+  } else if (meleeTimer > 0) {
     meleeTimer = Math.max(0, meleeTimer - dt);
     const swingProgress = 1 - meleeTimer / weapon.swingDuration;
     const swing = Math.sin(swingProgress * Math.PI);
@@ -1795,7 +2106,9 @@ function updateWeapon(dt) {
     }
   }
   if (pumpGroup && reloadTimer > 0) pumpGroup.position.z = pumpBasePosition.z + reloadMotion * 0.08;
-  weaponView.visible = !dead && !heldBody;
+  if (snowPayload) snowPayload.visible = carriedSnow > 0 && !heldBody;
+  weaponModel.visible = !heldBody;
+  weaponView.visible = !dead && Boolean(weapon || heldBody);
 }
 
 // Separate low-poly operator preview for the inventory screen. The model is original and uses block-based geometry.
@@ -1871,6 +2184,7 @@ let damageCooldown = 0;
 let health = 100;
 let hunger = 100;
 let thirst = 100;
+let heat = 58;
 let needsHudTimer = 0;
 let dead = false;
 let deathTimer = 0;
@@ -1878,7 +2192,7 @@ let pendingDeathRelease = false;
 let selectedBodyPart = null;
 let inventoryOpen = false;
 let inventoryMode = 'bag';
-let selectedCatalogWeaponId = currentWeaponId;
+let selectedCatalogWeaponId = 'shovel';
 let menuOpen = false;
 let inventoryItems = [];
 let selectedInventoryId = null;
@@ -1929,6 +2243,9 @@ function updateNeedsHUD() {
   $('thirst-value').textContent = String(Math.round(thirst));
   $('thirst-bar').style.width = `${thirst}%`;
   $('thirst-bar').style.background = thirst < 25 ? '#5fa6c5' : '#78aeb6';
+  $('heat-value').textContent = String(Math.round(heat));
+  $('heat-bar').style.width = `${heat}%`;
+  $('heat-bar').style.background = heat < 25 ? '#69a9c2' : heat > 78 ? '#edaf68' : '#cf8756';
 }
 
 function labelBodyPart(part) {
@@ -2023,6 +2340,8 @@ function updateNeeds(dt) {
   if (!started || inventoryOpen || menuOpen || dead) return;
   hunger = Math.max(0, hunger - dt * 0.045);
   thirst = Math.max(0, thirst - dt * 0.065);
+  const stoveDistance = Math.hypot(playerBody.position.x - stovePosition.x, playerBody.position.z - stovePosition.z);
+  heat = updateHeat(heat, dt, stoveLit && stoveDistance <= 3.8);
   needsHudTimer += dt;
   if (needsHudTimer >= 0.35) {
     needsHudTimer = 0;
@@ -2081,10 +2400,64 @@ function getTargetMeta() {
   const hits = raycaster.intersectObjects(raycastTargets, true);
   for (const hit of hits) {
     const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-    if (!meta || meta.isStored || hit.distance > (meta.range || 4.5)) continue;
+    if (!meta || meta.isStored || meta.isEmpty || hit.distance > (meta.range || 4.5)) continue;
     return { meta, distance: hit.distance, point: hit.point };
   }
   return null;
+}
+
+function getGroundTarget() {
+  if (!floorSurfaceMesh) return null;
+  camera.updateMatrixWorld(true);
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const hit = raycaster.intersectObject(floorSurfaceMesh, false)[0];
+  return hit && hit.distance <= 4.8 ? hit : null;
+}
+
+function isNearStove() {
+  return Math.hypot(playerBody.position.x - stovePosition.x, playerBody.position.z - stovePosition.z) <= 2.85;
+}
+
+function beginSnowAction(kind, payload) {
+  if (currentWeaponId !== 'shovel') {
+    toast('НУЖНА ЛОПАТА', 1.0);
+    return false;
+  }
+  if (shovelActionTimer > 0) return false;
+  shovelAction = kind === 'scoop'
+    ? { kind, drift: payload }
+    : { kind, point: { x: payload.x, z: payload.z } };
+  shovelActionTimer = SHOVEL_ACTION_DURATION;
+  fireHeld = false;
+  playWeaponSound(WEAPON_BY_ID.get('shovel'), 'swing');
+  return true;
+}
+
+function finishSnowAction() {
+  const action = shovelAction;
+  shovelAction = null;
+  if (!action) return;
+  if (action.kind === 'scoop') {
+    const result = scoopSnow(action.drift, carriedSnow);
+    if (!result.ok) {
+      toast(result.reason === 'already-carrying' ? 'СНЕГ УЖЕ НА ЛОПАТЕ' : 'СУГРОБ ЗАКОНЧИЛСЯ', 1.0);
+      return;
+    }
+    carriedSnow = result.amount;
+    updateSnowDriftVisual(action.drift);
+    if (snowPayload) snowPayload.visible = true;
+    toast('СНЕГ НА ЛОПАТЕ · ПЕРЕНОС ЗАМЕДЛЯЕТ', 1.35);
+    return;
+  }
+  const result = depositSnow(carriedSnow, action.point);
+  if (!result.ok) {
+    toast('НА ЛОПАТЕ НЕТ СНЕГА', 0.9);
+    return;
+  }
+  createSnowDrift(result.pile.x, result.pile.z, result.pile.amount);
+  carriedSnow = result.remaining;
+  if (snowPayload) snowPayload.visible = false;
+  toast('СНЕГ СБРОШЕН · НОВЫЙ СУГРОБ', 1.2);
 }
 
 function updateTargetUI() {
@@ -2099,11 +2472,26 @@ function updateTargetUI() {
   }
   currentTarget = getTargetMeta();
   if (heldBody) {
+    const heldMeta = heldBody.gameMeta;
+    const canFeedStove = heldMeta?.kind === 'firewood' && isNearStove();
+    label.textContent = canFeedStove ? (stoveLit ? 'ПОДБРОСИТЬ ДРОВА' : 'РАЗЖЕЧЬ ПЕЧЬ') : 'ПОЛОЖИТЬ ПРЕДМЕТ';
     action.classList.add('is-holding');
-    action.classList.remove('has-target');
+    action.classList.toggle('has-target', canFeedStove);
     return;
   }
   action.classList.remove('is-holding');
+  if (currentWeaponId === 'shovel' && carriedSnow > 0) {
+    label.textContent = 'СБРОСИТЬ СНЕГ';
+    action.classList.toggle('has-target', Boolean(currentTarget || getGroundTarget()));
+    return;
+  }
+  if (currentTarget?.meta.kind === 'snowdrift') {
+    label.textContent = currentWeaponId === 'shovel' ? 'ЧЕРПАТЬ СНЕГ' : 'НУЖНА ЛОПАТА';
+  } else if (currentTarget?.meta.kind === 'stove') {
+    label.textContent = 'НУЖНЫ ДРОВА';
+  } else if (currentTarget?.meta.kind === 'firewood' || currentTarget?.meta.kind === 'prop') {
+    label.textContent = 'ВЗЯТЬ';
+  }
   action.classList.toggle('has-target', Boolean(currentTarget));
 }
 
@@ -2258,7 +2646,7 @@ function selectCatalogWeapon(id) {
   $('inventory-selected-name').textContent = weapon.name;
   $('inventory-selected-weight').textContent = `${weapon.weight.toFixed(1)} кг`;
   const ammoDescription = weapon.magazineSize === null
-    ? 'Без боеприпасов · ближний бой'
+    ? (weapon.type === 'tool' ? 'Без боеприпасов · инструмент' : 'Без боеприпасов · ближний бой')
     : `Магазин ${weapon.magazineSize} · запас ${weapon.reserve} патронов`;
   const damageDescription = weapon.pellets ? `${weapon.pellets} дробин × ${weapon.damage} урона` : `${weapon.damage} урона за попадание`;
   $('inventory-selected-description').textContent = `${weapon.description} ${damageDescription}. ${ammoDescription}.`;
@@ -2266,7 +2654,7 @@ function selectCatalogWeapon(id) {
   $('inventory-take').disabled = alreadyEquipped;
   $('inventory-take').textContent = alreadyEquipped ? 'УЖЕ В РУКАХ' : 'ЭКИПИРОВАТЬ';
   const ammo = weaponAmmo.get(id);
-  $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
+  $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.type === 'tool' ? 'ИНСТРУМЕНТ' : weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
   for (const button of $('inventory-all-grid').querySelectorAll('.armory-item')) {
     button.classList.toggle('selected', button.dataset.weaponId === id);
     button.setAttribute('aria-pressed', String(button.dataset.weaponId === id));
@@ -2288,18 +2676,20 @@ function setInventoryTab(mode) {
 function updateInventorySelection() {
   const takeButton = $('inventory-take');
   if (inventoryMode === 'all') {
-    if (!WEAPON_BY_ID.has(selectedCatalogWeaponId)) selectedCatalogWeaponId = currentWeaponId;
+    if (!WEAPON_BY_ID.has(selectedCatalogWeaponId)) selectedCatalogWeaponId = 'shovel';
     const weapon = WEAPON_BY_ID.get(selectedCatalogWeaponId);
     const ammo = weaponAmmo.get(weapon.id);
     $('inventory-selected-name').textContent = weapon.name;
     $('inventory-selected-weight').textContent = `${weapon.weight.toFixed(1)} кг`;
-    const ammoDescription = weapon.magazineSize === null ? 'Без боеприпасов · ближний бой' : `Магазин ${weapon.magazineSize} · запас ${weapon.reserve} патронов`;
+    const ammoDescription = weapon.magazineSize === null
+      ? (weapon.type === 'tool' ? 'Без боеприпасов · инструмент' : 'Без боеприпасов · ближний бой')
+      : `Магазин ${weapon.magazineSize} · запас ${weapon.reserve} патронов`;
     const damageDescription = weapon.pellets ? `${weapon.pellets} дробин × ${weapon.damage} урона` : `${weapon.damage} урона за попадание`;
     $('inventory-selected-description').textContent = `${weapon.description} ${damageDescription}. ${ammoDescription}.`;
     const alreadyEquipped = currentWeaponId === weapon.id;
     takeButton.disabled = alreadyEquipped;
     takeButton.textContent = alreadyEquipped ? 'УЖЕ В РУКАХ' : 'ЭКИПИРОВАТЬ';
-    $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
+    $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.type === 'tool' ? 'ИНСТРУМЕНТ' : weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
     return;
   }
   const item = inventoryItems.find((entry) => entry.id === selectedInventoryId);
@@ -2332,7 +2722,7 @@ function updateArmoryUI() {
     card.title = `${weapon.name} · ${weapon.description}`;
     const icon = document.createElement('span');
     icon.className = `armory-item-icon ${weapon.type}`;
-    icon.textContent = weapon.type === 'melee' ? '⚔' : weapon.type === 'pistol' ? '▣' : weapon.type === 'shotgun' ? '◆' : '⌁';
+    icon.textContent = weapon.type === 'tool' ? '⚒' : weapon.type === 'melee' ? '⚔' : weapon.type === 'pistol' ? '▣' : weapon.type === 'shotgun' ? '◆' : '⌁';
     const name = document.createElement('b');
     name.className = 'armory-item-name';
     name.textContent = weapon.name;
@@ -2544,15 +2934,61 @@ function takeInventoryItem(id) {
   updateInventoryUI();
 }
 
+function feedStoveWithHeldWood() {
+  if (!heldBody || heldBody.gameMeta?.kind !== 'firewood' || !isNearStove()) return false;
+  const body = heldBody;
+  const meta = body.gameMeta;
+  const recordIndex = physicsRecords.findIndex((record) => record.body === body);
+  if (recordIndex < 0) return false;
+  const [record] = physicsRecords.splice(recordIndex, 1);
+  meta.isHeld = false;
+  heldBody = null;
+  world.removeBody(body);
+  scene.remove(record.visual);
+  for (let i = raycastTargets.length - 1; i >= 0; i--) {
+    if (raycastTargets[i].userData.gameMeta === meta) raycastTargets.splice(i, 1);
+  }
+  world.broadphase.dirty = true;
+  setHandPose(0);
+  stoveFuel += 52;
+  stoveLit = true;
+  if (stoveDoorGlow) stoveDoorGlow.visible = true;
+  stoveCrackleTimer = 0.75 + Math.random() * 0.55;
+  playFireCrackle();
+  toast(stoveFuel > 52 ? 'ДРОВА ДОБАВЛЕНЫ · ПЕЧЬ ГОРИТ' : 'ПЕЧЬ РАСТОПЛЕНА', 1.2);
+  return true;
+}
+
 function doAction() {
   if (dead || !started || inventoryOpen || menuOpen) return;
-  if (heldBody) { throwHeld(); return; }
+  if (heldBody) {
+    if (!feedStoveWithHeldWood()) throwHeld();
+    return;
+  }
+  if (currentWeaponId === 'shovel' && carriedSnow > 0) {
+    const groundHit = getGroundTarget();
+    if (groundHit) beginSnowAction('dump', groundHit.point);
+    else toast('НАПРАВЬТЕ ЛОПАТУ НА ПОЛ', 1.0);
+    return;
+  }
   const target = currentTarget || getTargetMeta();
   if (!target) {
     toast('НЕТ ЦЕЛИ В ЗОНЕ ДОСЯГАЕМОСТИ', 0.9);
     return;
   }
-  if (target.meta.kind === 'prop') {
+  if (target.meta.kind === 'snowdrift') {
+    if (currentWeaponId !== 'shovel') {
+      toast('НУЖНА ЛОПАТА', 1.0);
+      return;
+    }
+    beginSnowAction('scoop', target.meta.drift);
+    return;
+  }
+  if (target.meta.kind === 'stove') {
+    toast('ВОЗЬМИТЕ ДРОВА И ИСПОЛЬЗУЙТЕ ДЕЙСТВИЕ', 1.15);
+    return;
+  }
+  if (target.meta.kind === 'firewood' || target.meta.kind === 'prop') {
     pickUp(target.meta);
     return;
   }
@@ -2609,7 +3045,7 @@ function updatePlayer(dt) {
   const length = Math.hypot(strafe, forward);
   if (length > 1) { strafe /= length; forward /= length; }
   const sprinting = !inventoryOpen && (keys.has('ShiftLeft') || keys.has('ShiftRight') || Math.hypot(joystick.x, joystick.y) > 0.84);
-  const speed = sprinting ? 5.25 : 3.8;
+  const speed = movementSpeedWithSnow(sprinting ? 5.25 : 3.8, carriedSnow);
   const dx = -Math.sin(yaw) * forward + Math.cos(yaw) * strafe;
   const dz = -Math.cos(yaw) * forward - Math.sin(yaw) * strafe;
   const smoothing = Math.min(1, dt * (length > 0.02 ? 13 : 17));
@@ -2628,7 +3064,7 @@ function updateCamera(dt) {
     handGroup.visible = false;
     return;
   }
-  handGroup.visible = true;
+  handGroup.visible = Boolean(currentWeaponId || heldBody);
   const moving = isMovementKeyDown();
   const bob = moving ? Math.sin(walkPhase * 2.0) * 0.026 : 0;
   const sway = moving ? Math.sin(walkPhase) * 0.012 : 0;
@@ -2774,6 +3210,7 @@ function animate(time) {
   }
   keepPlayerInBounds();
   updatePlayerCollisionMasks();
+  updateFireEffects(dt);
   updateNeeds(dt);
   syncVisuals();
   targetRefresh += dt;

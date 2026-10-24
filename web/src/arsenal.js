@@ -61,6 +61,13 @@ export const WEAPON_CATALOG = Object.freeze([
     reloadDuration: 1.65, automatic: false, weight: 3.5,
     description: 'Помповый дробовик: 8 дробин за выстрел, трубчатый магазин на 8 патронов.',
     sound: { frequency: 70, filter: 720, duration: 0.31, noise: 1.05, bass: 0.28, waveform: 'sawtooth' }
+  },
+  {
+    id: 'shovel', name: 'Лопата', category: 'Инструменты', type: 'tool', model: 'shovel',
+    damage: 24, range: 1.8, cooldown: 0.82, swingDuration: 0.64, magazineSize: null, reserve: 0,
+    reloadDuration: 0, automatic: false, weight: 3.6,
+    description: 'Стальная штыковая лопата с деревянным черенком. Ею можно черпать и переносить снег.',
+    sound: { frequency: 125, filter: 620, duration: 0.24, noise: 0.23, bass: 0.065, swing: 230, impact: 92 }
   }
 ]);
 

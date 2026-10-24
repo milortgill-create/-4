@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#11191d">
-  <title>Полигон</title>
+  <title>POLYGON 01 — Снежный двор</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -53,6 +53,10 @@
         <div class="vital-heading"><span>ЖАЖДА</span><b><strong id="thirst-value">100</strong><small>%</small></b></div>
         <div class="vital-track thirst-track"><i id="thirst-bar"></i></div>
       </div>
+      <div class="vital-meter heat-meter">
+        <div class="vital-heading"><span>ТЕПЛО</span><b><strong id="heat-value">58</strong><small>%</small></b></div>
+        <div class="vital-track heat-track"><i id="heat-bar"></i></div>
+      </div>
       <div id="injury-status" class="injury-status">НЕТ ТРАВМ</div>
     </div>
   </section>
@@ -96,7 +100,7 @@
         <div class="inventory-grid-column">
           <div class="inventory-tabs" role="tablist" aria-label="Каталог предметов">
             <button id="inventory-tab-bag" class="inventory-tab active" type="button" role="tab" aria-selected="true" aria-controls="inventory-bag-view">РЮКЗАК</button>
-            <button id="inventory-tab-all" class="inventory-tab" type="button" role="tab" aria-selected="false" aria-controls="inventory-all-view">ВСЕ ПРЕДМЕТЫ <small>9</small></button>
+            <button id="inventory-tab-all" class="inventory-tab" type="button" role="tab" aria-selected="false" aria-controls="inventory-all-view">ВСЕ ПРЕДМЕТЫ <small>10</small></button>
           </div>
           <div id="inventory-bag-view" class="inventory-view" role="tabpanel" aria-labelledby="inventory-tab-bag">
             <div class="inventory-column-heading"><span>РЮКЗАК</span><b>8 × 5</b></div>
@@ -106,7 +110,7 @@
             </div>
           </div>
           <div id="inventory-all-view" class="inventory-view" role="tabpanel" aria-labelledby="inventory-tab-all" hidden>
-            <div class="inventory-column-heading"><span>АРСЕНАЛ · ТЕСТОВАЯ ПЕСКОЧНИЦА</span><b>9 ПОЗИЦИЙ</b></div>
+            <div class="inventory-column-heading"><span>АРСЕНАЛ И ИНСТРУМЕНТЫ · ТЕСТ</span><b>10 ПОЗИЦИЙ</b></div>
             <div id="inventory-all-grid" class="inventory-all-grid" aria-label="Все доступные предметы"></div>
           </div>
         </div>

@@ -8,7 +8,8 @@
     "test:physics": "node tests/physics-smoke.mjs",
     "test:behavior": "node tests/mannequin-behavior-smoke.mjs",
     "test:arsenal": "node tests/arsenal-smoke.mjs",
-    "test": "npm run test:physics && npm run test:behavior && npm run test:arsenal"
+    "test:survival": "node tests/survival-smoke.mjs",
+    "test": "npm run test:physics && npm run test:behavior && npm run test:arsenal && npm run test:survival"
   },
   "dependencies": {
     "cannon-es": "0.20.0",

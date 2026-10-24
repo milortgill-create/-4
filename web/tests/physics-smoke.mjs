@@ -73,6 +73,14 @@ function addProp(world, name, mass, position, shape, offset = new C.Vec3(), yaw 
     [3, [6.15, 0.08, 2.2], 2.15, 0.3, 0.14, 3, -0.13]
   ]) box(`plank ${i}`, p, [l, h, w], m, yaw);
   bodies.push(addProp(world, 'shovel', 3.6, [-5.55, 0.07, 2.7], new C.Box(new C.Vec3(0.64, 0.07, 0.2)), new C.Vec3(), -0.25));
+  for (const [i, position, yaw] of [
+    [1, [6.15, 0.1, -4.1], 0.18],
+    [2, [6.78, 0.1, -4.22], -0.36],
+    [3, [5.82, 0.1, -4.52], 0.46],
+    [4, [6.22, 0.1, -3.72], -0.2]
+  ]) {
+    bodies.push(addProp(world, `firewood ${i}`, 1.35, position, new C.Box(new C.Vec3(0.34, 0.09, 0.09)), new C.Vec3(), yaw));
+  }
 
   for (let step = 0; step < 600; step++) world.step(1 / 60, 1 / 60, 4);
   for (const { name, body } of bodies) {

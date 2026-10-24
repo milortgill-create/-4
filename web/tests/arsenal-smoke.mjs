@@ -11,9 +11,11 @@ import {
   traceHitscan
 } from '../src/arsenal.js';
 
-const expectedIds = ['cleaver', 'sledgehammer', 'nail-bat', 'pm', 'tt', 'glock-17', 'ak-47', 'm4a1', 'pump-shotgun'];
+const expectedIds = ['cleaver', 'sledgehammer', 'nail-bat', 'pm', 'tt', 'glock-17', 'ak-47', 'm4a1', 'pump-shotgun', 'shovel'];
 assert.deepEqual(WEAPON_CATALOG.map((weapon) => weapon.id), expectedIds, 'the complete requested arsenal must be available');
 assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.type === 'melee').length, 3);
+assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.type === 'tool').length, 1);
+assert.equal(WEAPON_BY_ID.get('shovel').model, 'shovel', 'the shovel needs a dedicated first-person model');
 assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.type === 'pistol').length, 3);
 assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.type === 'rifle').length, 2);
 assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.type === 'shotgun').length, 1);
@@ -67,8 +69,11 @@ const inventoryHtml = await readFile(new URL('../../app/src/main/assets/index.ht
 assert.match(inventoryHtml, /id="inventory-tab-all"[^>]*>ВСЕ ПРЕДМЕТЫ/, 'the creative all-items inventory tab should be present');
 assert.match(inventoryHtml, /id="inventory-all-grid"/, 'the creative arsenal grid should be present');
 assert.match(mainSource, /function createBulletMark\(/, 'wall hits should create persistent bullet marks');
+assert.match(mainSource, /currentWeaponId = null/, 'the player should spawn without an equipped weapon');
+assert.match(mainSource, /let inventoryItems = \[\]/, 'the backpack should start empty');
+assert.match(mainSource, /handGroup\.visible = false/, 'first-person hands should start hidden');
 assert.match(mainSource, /bulletSurface: true/, 'room walls must be included in bullet raycasts');
 assert.match(mainSource, /ragdollPart\.body\.type = CANNON\.Body\.DYNAMIC/, 'weapon impacts should switch a mannequin to ragdoll physics');
 assert.match(mainSource, /damageMannequin\(human, weapon, meta\.key/, 'weapon hits should subtract mannequin health');
 
-console.log('arsenal OK: 9 weapons, unique sound profiles, per-weapon magazines/reloads, head/body damage, straight hitscan and wall/dummy ray order');
+console.log('arsenal OK: 9 weapons plus the shovel tool, unique sound profiles, per-weapon magazines/reloads, damage, hitscan and hidden empty hands');
