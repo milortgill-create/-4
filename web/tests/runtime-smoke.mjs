@@ -6,6 +6,7 @@ import * as CANNON from 'cannon-es';
 import * as arsenal from '../src/arsenal.js';
 import * as survival from '../src/survival.js';
 import * as village from '../src/village.js';
+import * as residents from '../src/residents.js';
 
 // Boot the complete main module against a small DOM/WebGL shim so top-level scene errors
 // and first-frame exceptions are caught in CI without requiring a browser or Android SDK.
@@ -94,7 +95,7 @@ const window = {
   devicePixelRatio: 1,
   addEventListener() {},
   removeEventListener() {},
-  location: { reload() {} }
+  location: { href: 'file:///android_asset/index.html?sandbox=test', search: '?sandbox=test', reload() {} }
 };
 class TestRenderer {
   constructor({ canvas }) {
@@ -119,8 +120,11 @@ const sandbox = {
   ...arsenal,
   ...survival,
   ...village,
+  ...residents,
   document,
   window,
+  URL,
+  URLSearchParams,
   TestRenderer,
   matchMedia() { return { matches: true }; },
   requestAnimationFrame(callback) { scheduledFrame = callback; return 1; },
@@ -131,9 +135,9 @@ const sandbox = {
   console
 };
 let source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
-source = source.replace(/^import .*;\s*$/gm, '');
+source = source.replace(/^import\b[\s\S]*?;\s*$/gm, '');
 source = source.replaceAll('new THREE.WebGLRenderer(', 'new TestRenderer(');
-source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts; globalThis.__auntZina = auntZina; globalThis.__updateAuntZinaAI = updateAuntZinaAI; globalThis.__updatePlayer = updatePlayer; globalThis.__keys = keys; globalThis.__joystick = joystick; globalThis.__sprintButton = sprintButton; globalThis.__isSprintHeld = () => sprintHeld; globalThis.__startGame = () => { started = true; };';
+source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts; globalThis.__auntZina = auntZina; globalThis.__updateAuntZinaAI = updateAuntZinaAI; globalThis.__updatePlayer = updatePlayer; globalThis.__keys = keys; globalThis.__joystick = joystick; globalThis.__sprintButton = sprintButton; globalThis.__isSprintHeld = () => sprintHeld; globalThis.__startGame = () => { started = true; }; globalThis.__residents = residentPopulation; globalThis.__activeResidents = () => [...activeVillageResidents]; globalThis.__updateResidents = updateVillageResidents; globalThis.__equipWeapon = equipWeapon; globalThis.__currentWeaponId = () => currentWeaponId; globalThis.__weaponView = weaponView; globalThis.__weaponModel = weaponModel; globalThis.__inventoryItems = () => inventoryItems; globalThis.__testSandbox = TEST_SANDBOX; globalThis.__getTargetMeta = getTargetMeta; globalThis.__doAction = doAction; globalThis.__takeInventoryItem = takeInventoryItem; globalThis.__addShovel = addShovel; globalThis.__updateCamera = updateCamera; globalThis.__physicsRecords = physicsRecords; globalThis.__setView = (nextYaw, nextPitch = 0) => { yaw = nextYaw; pitch = nextPitch; };';
 
 runInNewContext(source, sandbox, { filename: 'main.js', timeout: 30_000 });
 assert.ok(sandbox.__scene.children.length > 100, 'complete village geometry should be present in the scene');
@@ -151,6 +155,15 @@ sandbox.__camera.getWorldDirection(viewDirection);
 assert.ok(viewDirection.x < -0.9, 'the initial view should face west into the village');
 assert.ok(Number.isFinite(sandbox.__player.position.y), 'the player should remain on a valid physical surface on frame one');
 assert.ok(scheduledFrame, 'the animation loop should continue scheduling frames');
+assert.equal(sandbox.__testSandbox, true, 'the runtime should recognize the optional test-sandbox URL mode');
+assert.deepEqual([...sandbox.__inventoryItems()].map((item) => item.meta.weaponId), ['shovel', 'glock-17', 'ak-47'], 'the test backpack should begin with a shovel, pistol and automatic rifle');
+assert.equal(sandbox.__residents.length, 200, 'all 200 villagers should exist as lightweight records');
+assert.ok(sandbox.__activeResidents().length >= 10 && sandbox.__activeResidents().length <= 15, 'only about 10–15 villagers should be rendered near the player');
+assert.equal(sandbox.__residents.filter((resident) => resident.visual).length, sandbox.__activeResidents().length, 'distant residents must remain unspawned');
+const movingResident = sandbox.__activeResidents()[0];
+const residentStart = { x: movingResident.x, z: movingResident.z };
+for (let i = 0; i < 70; i++) sandbox.__updateResidents(0.1);
+assert.ok(Math.hypot(movingResident.x - residentStart.x, movingResident.z - residentStart.z) > 0.5, 'streamed villagers should walk along their saved route');
 
 assert.equal(sandbox.__auntZina.root.userData.npcId, 'aunt-zina', 'the shop-side resident should be a real scene character');
 assert.equal(sandbox.__auntZina.root.position.x, village.VILLAGE_LAYOUT.auntZina.x);
@@ -205,4 +218,65 @@ const sprintingDistance = simulateTravel(true);
 assert.ok(walkingDistance > 3.5, `the player must move briskly while walking (travelled ${walkingDistance.toFixed(2)} m in one second)`);
 assert.ok(sprintingDistance > walkingDistance * 1.25, 'physical movement under the sprint button should be meaningfully faster than walking');
 
-console.log(`runtime OK: village (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} bodies), first frame, Aunt Zina head tracking and physical walk/sprint`);
+sandbox.__takeInventoryItem('sandbox-glock-17');
+assert.equal(sandbox.__currentWeaponId(), 'glock-17', 'a test-backpack pistol should equip directly');
+sandbox.__takeInventoryItem('sandbox-ak-47');
+assert.equal(sandbox.__currentWeaponId(), 'ak-47', 'a test-backpack automatic rifle should equip directly');
+assert.equal(sandbox.__inventoryItems().length, 1, 'equipping test gear should remove only that selected item from the backpack');
+assert.equal(sandbox.__weaponView.parent, sandbox.__camera, 'the held item model should be attached to the camera');
+assert.equal(sandbox.__weaponView.children.length, 2, 'the camera should contain only the selected weapon model and muzzle effect');
+assert.doesNotMatch(source, /handGroup|weaponHands|buildHand\s*\(/, 'first-person hand and fist geometry must be absent');
+
+const nearbyResident = [...sandbox.__activeResidents()].sort((a, b) => Math.hypot(a.x - sandbox.__player.position.x, a.z - sandbox.__player.position.z) - Math.hypot(b.x - sandbox.__player.position.x, b.z - sandbox.__player.position.z))[0];
+sandbox.__player.position.set(nearbyResident.x, village.terrainHeightAt(nearbyResident.x) + 0.87, nearbyResident.z);
+sandbox.__player.velocity.set(0, 0, 0);
+sandbox.__keys.clear();
+sandbox.__joystick.x = 0;
+sandbox.__joystick.y = 0;
+sandbox.__updateCamera(1 / 60);
+const fleeStart = { x: nearbyResident.x, z: nearbyResident.z };
+sandbox.__sprintButton.dispatch('pointerdown', sprintEvent);
+sandbox.__updateResidents(0.5);
+assert.equal(nearbyResident.fleeing, true, 'a nearby villager should enter flee behavior when the armed player sprints');
+assert.ok(Math.hypot(nearbyResident.x - fleeStart.x, nearbyResident.z - fleeStart.z) > 0.5, 'a threatened villager should move away from the player');
+sandbox.__sprintButton.dispatch('pointerup', { pointerId: 7 });
+
+const dropButton = document.getElementById('drop-button');
+const dropEvent = { pointerId: 8, preventDefault() {}, stopPropagation() {} };
+sandbox.__player.position.set(100, village.terrainHeightAt(100) + 0.87, 100);
+sandbox.__player.velocity.set(0, 0, 0);
+sandbox.__setView(Math.PI / 2, 0);
+sandbox.__updateCamera(1 / 60);
+dropButton.dispatch('click', dropEvent);
+assert.equal(sandbox.__currentWeaponId(), null, 'the dedicated touch button should unequip and throw the held weapon');
+const droppedRifle = [...sandbox.__physicsRecords].find((record) => record.body.gameMeta.kind === 'weapon' && record.body.gameMeta.weaponId === 'ak-47' && record.body.world === sandbox.__world);
+assert.ok(droppedRifle, 'a thrown weapon should become a live world pickup');
+assert.ok(droppedRifle.body.velocity.length() > 0, 'a thrown weapon should receive physical velocity');
+sandbox.__updateCamera(1 / 60);
+sandbox.__doAction();
+assert.equal(sandbox.__currentWeaponId(), 'ak-47', 'the dropped weapon should be recoverable with Action');
+
+// Leave the rifle away from the shovel-pickup test so only the intended shovel is in reach.
+dropButton.dispatch('click', dropEvent);
+sandbox.__player.position.set(120, village.terrainHeightAt(120) + 0.87, 100);
+sandbox.__player.velocity.set(0, 0, 0);
+sandbox.__setView(Math.PI / 2, 0);
+sandbox.__updateCamera(1 / 60);
+const testBagCount = sandbox.__inventoryItems().length;
+const testShovelBody = sandbox.__addShovel('runtime-shovel', [120, village.terrainHeightAt(120) + 0.08, 100], 0);
+const shovelTarget = sandbox.__getTargetMeta();
+assert.equal(shovelTarget.meta, testShovelBody.gameMeta, 'Action target search should find a shovel beneath the player even when the reticle faces away');
+assert.equal(shovelTarget.steppedOn, true, 'standing over the shovel should count as a pickup target');
+sandbox.__doAction();
+assert.equal(sandbox.__currentWeaponId(), 'shovel', 'Action should equip the nearby shovel without routing it through the backpack');
+assert.equal(sandbox.__inventoryItems().length, testBagCount, 'world pickup should not add the shovel to the backpack');
+assert.equal(testShovelBody.world, null, 'equipping the shovel should remove its world collider');
+dropButton.dispatch('click', dropEvent);
+assert.equal(sandbox.__currentWeaponId(), null, 'the separate drop button should also throw the shovel');
+const droppedShovel = [...sandbox.__physicsRecords].find((record) => record.body.gameMeta.kind === 'weapon' && record.body.gameMeta.weaponId === 'shovel' && record.body.world === sandbox.__world);
+assert.ok(droppedShovel, 'the dropped shovel should remain as a world pickup');
+sandbox.__updateCamera(1 / 60);
+sandbox.__doAction();
+assert.equal(sandbox.__currentWeaponId(), 'shovel', 'the dropped shovel should be recoverable with Action');
+
+console.log(`runtime OK: village (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} bodies), streamed residents and flee, no first-person hands, test backpack, quick pickup, throw and recovery`);

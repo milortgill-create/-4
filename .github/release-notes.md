@@ -1,10 +1,10 @@
-# POLYGON 01 — v1.8.0 «Тётя Зина»
+# POLYGON 01 — v1.9.0 «Жители деревни»
 
-- Removed all world-space text signs and plaques: the stop, shop, pond, hangars and item props have no readable 3D lettering. Buildings and scenery identify locations visually.
-- Increased movement to 5.5 m/s walking and 8.5 m/s sprinting. Android has a hold-to-sprint button beside the joystick; keyboard players can hold Shift.
-- Reworked the landscape into a smooth high ridge at the bus stop, a gentle continuous downhill toward the central village, and a lower western basin. Rendered terrain and short, overlapping physics sections follow the same height profile.
-- Added Aunt Zina beside the shop in winter clothing. She stays in place and smoothly turns her head toward nearby players.
+- Добавлено 200 блочных жителей: их маршруты между домами, магазином и Михтоком хранятся отдельно от моделей; рядом с игроком одновременно отображаются не более 15 человек. Жители идут по поселению и убегают, когда игрок бежит с оружием.
+- Полностью удалены FP-руки и кулаки. При экипировке в кадре отображается только модель оружия или инструмента.
+- Действие сразу экипирует наведённое или находящееся рядом оружие/лопату, не помещая мировой предмет в рюкзак. Отдельная сенсорная кнопка «Выбросить» физически бросает удерживаемый предмет или оружие; их можно снова подобрать.
+- В меню добавлена отдельная тестовая песочница с лопатой, Glock-17 и автоматом в стартовом рюкзаке. Обычная игра по-прежнему начинается с пустого рюкзака.
 
-The map retains its snowy village, fenced homes, shop, school, garages, industrial yards, pond and shovel-diggable physical snowbanks. The game remains offline on Android; gameplay assets are bundled locally.
+Включены все предыдущие изменения: отсутствие 3D-вывесок, плавный склон от высокой остановки к центру, дома с заборами, ускоренное движение, мобильный бег и неподвижная тётя Зина у магазина, поворачивающая голову к игроку.
 
-Debug-signed APK for Android 6.0+ (API 23).
+Игра полностью работает офлайн на Android; модели, текстуры и звук включены в APK. Debug-подписанная сборка для Android 6.0+ (API 23).

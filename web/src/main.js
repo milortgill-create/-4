@@ -3,12 +3,21 @@ import * as CANNON from 'cannon-es';
 import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
 import { PLAYER_WALK_SPEED, PLAYER_SPRINT_SPEED, scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
 import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, terrainHeightAt, terrainSlopeAt, terrainColliderSegments } from './village.js';
+import {
+  createVillageResidents,
+  selectActiveResidents,
+  VILLAGE_RESIDENT_COUNT,
+  MAX_ACTIVE_RESIDENTS,
+  RESIDENT_VISIBILITY_RADIUS,
+  RESIDENT_RETENTION_RADIUS
+} from './residents.js';
 
 const isMeleeWeapon = (weapon) => weapon?.type === 'melee' || weapon?.type === 'tool';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 const mobile = matchMedia('(pointer: coarse)').matches;
+const TEST_SANDBOX = new URLSearchParams(window.location?.search || '').get('sandbox') === 'test';
 
 let renderer;
 try {
@@ -1593,8 +1602,7 @@ function buildMannequin(id, origin, colorIndex) {
   return human;
 }
 
-buildMannequin('D-01', [-135, 0, 212], 0);
-buildMannequin('D-02', [143, 0, -142], 1);
+// The reusable physics mannequin rig remains available to the combat test harness; village life is rendered by the streamed resident population below.
 
 function buildAuntZina() {
   const location = VILLAGE_LAYOUT.auntZina;
@@ -2066,18 +2074,369 @@ playerBody.gameMeta = { kind: 'player' };
 world.addBody(playerBody);
 const auntZina = buildAuntZina();
 let sprintHeld = false;
+
+function buildResidentRoadGraph() {
+  const serviceTrack = [[238, -310], [216, -313], [194, -316], [171, -319], [145, -321.5]];
+  const roadLines = [...VILLAGE_LAYOUT.roads.map((road) => road.points), serviceTrack];
+  const nodes = [];
+  const edges = [];
+  roadLines.forEach((line, lineIndex) => {
+    let previous = -1;
+    for (const [x, z] of line) {
+      const index = nodes.length;
+      nodes.push({ x, z, lineIndex });
+      edges.push([]);
+      if (previous >= 0) {
+        const distance = Math.hypot(x - nodes[previous].x, z - nodes[previous].z);
+        edges[index].push({ to: previous, distance });
+        edges[previous].push({ to: index, distance });
+      }
+      previous = index;
+    }
+  });
+  const maxConnectorDistance = 38;
+  for (let a = 0; a < nodes.length; a++) {
+    for (let b = a + 1; b < nodes.length; b++) {
+      if (nodes[a].lineIndex === nodes[b].lineIndex) continue;
+      const distance = Math.hypot(nodes[a].x - nodes[b].x, nodes[a].z - nodes[b].z);
+      if (distance <= maxConnectorDistance && distance > 0.25) {
+        edges[a].push({ to: b, distance });
+        edges[b].push({ to: a, distance });
+      }
+    }
+  }
+  return { nodes, edges };
+}
+
+function findResidentRoadPath(start, destination) {
+  const { nodes, edges } = residentRoadGraph;
+  if (!nodes.length) return [start, destination];
+  const nearestNode = (point) => {
+    let nearest = 0;
+    let distanceSquared = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const dx = nodes[i].x - point.x;
+      const dz = nodes[i].z - point.z;
+      const nextDistanceSquared = dx * dx + dz * dz;
+      if (nextDistanceSquared < distanceSquared) {
+        nearest = i;
+        distanceSquared = nextDistanceSquared;
+      }
+    }
+    return nearest;
+  };
+  const source = nearestNode(start);
+  const target = nearestNode(destination);
+  const distances = new Array(nodes.length).fill(Infinity);
+  const previous = new Array(nodes.length).fill(-1);
+  const visited = new Array(nodes.length).fill(false);
+  distances[source] = 0;
+  for (let step = 0; step < nodes.length; step++) {
+    let current = -1;
+    let bestDistance = Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      if (!visited[i] && distances[i] < bestDistance) {
+        current = i;
+        bestDistance = distances[i];
+      }
+    }
+    if (current < 0 || current === target) break;
+    visited[current] = true;
+    for (const edge of edges[current]) {
+      const nextDistance = bestDistance + edge.distance;
+      if (nextDistance < distances[edge.to]) {
+        distances[edge.to] = nextDistance;
+        previous[edge.to] = current;
+      }
+    }
+  }
+  if (!Number.isFinite(distances[target])) return [start, destination];
+  const nodeRoute = [];
+  for (let at = target; at >= 0; at = previous[at]) {
+    nodeRoute.push(at);
+    if (at === source) break;
+  }
+  nodeRoute.reverse();
+  const route = [{ x: start.x, z: start.z }];
+  for (const nodeIndex of nodeRoute) {
+    const node = nodes[nodeIndex];
+    const last = route[route.length - 1];
+    if (Math.hypot(last.x - node.x, last.z - node.z) > 0.75) route.push({ x: node.x, z: node.z });
+  }
+  const last = route[route.length - 1];
+  if (Math.hypot(last.x - destination.x, last.z - destination.z) > 0.75) route.push({ x: destination.x, z: destination.z });
+  return route;
+}
+
+const residentRoadGraph = buildResidentRoadGraph();
+const residentShopDestination = {
+  x: VILLAGE_LAYOUT.shop.x,
+  z: VILLAGE_LAYOUT.shop.z - (19 / 2) + 1.3
+};
+const residentMikhtokDestination = {
+  x: VILLAGE_LAYOUT.hangars[0].x,
+  z: VILLAGE_LAYOUT.hangars[0].z + VILLAGE_LAYOUT.hangars[0].depth / 2 + 10
+};
+const residentPopulation = createVillageResidents(VILLAGE_LAYOUT, VILLAGE_RESIDENT_COUNT);
+let activeVillageResidents = new Set();
+let residentActivationTimer = 0;
+let residentSimulationTimer = 0;
+const residentClothingPalettes = [
+  { coat: 0x747b7a, trousers: 0x555e61 }, { coat: 0x646e70, trousers: 0x4c5558 },
+  { coat: 0x777870, trousers: 0x58584f }, { coat: 0x59686a, trousers: 0x444f52 },
+  { coat: 0x77716a, trousers: 0x54504d }, { coat: 0x65706b, trousers: 0x4b5550 }
+].map((palette) => ({
+  coat: new THREE.MeshStandardMaterial({ color: palette.coat, roughness: 0.9 }),
+  trousers: new THREE.MeshStandardMaterial({ color: palette.trousers, roughness: 0.93 })
+}));
+const residentSkinMaterial = new THREE.MeshStandardMaterial({ color: 0xbba18a, roughness: 0.94 });
+const residentBootMaterial = new THREE.MeshStandardMaterial({ color: 0x403b34, roughness: 0.92 });
+const residentHairMaterials = [0x62574a, 0x77756b, 0x4a4a45].map((value) => new THREE.MeshStandardMaterial({ color: value, roughness: 0.95 }));
+const residentGeometry = {
+  torso: new THREE.BoxGeometry(0.48, 0.62, 0.3),
+  pelvis: new THREE.BoxGeometry(0.4, 0.25, 0.28),
+  neck: new THREE.BoxGeometry(0.16, 0.13, 0.16),
+  head: new THREE.BoxGeometry(0.38, 0.39, 0.34),
+  hair: new THREE.BoxGeometry(0.39, 0.09, 0.35),
+  upperArm: new THREE.BoxGeometry(0.17, 0.37, 0.18),
+  lowerArm: new THREE.BoxGeometry(0.15, 0.35, 0.16),
+  hand: new THREE.BoxGeometry(0.14, 0.13, 0.15),
+  thigh: new THREE.BoxGeometry(0.21, 0.43, 0.22),
+  shin: new THREE.BoxGeometry(0.17, 0.38, 0.18),
+  boot: new THREE.BoxGeometry(0.22, 0.13, 0.3)
+};
+
+function residentDestination(index, resident) {
+  if (index === 0) return resident.home;
+  if (index === 1) return residentShopDestination;
+  return residentMikhtokDestination;
+}
+
+function planResidentRoute(resident, targetIndex) {
+  resident.targetIndex = ((targetIndex % 3) + 3) % 3;
+  const destination = residentDestination(resident.targetIndex, resident);
+  resident.path = findResidentRoadPath({ x: resident.x, z: resident.z }, destination);
+  resident.pathIndex = resident.path.length > 1 ? 1 : 0;
+  resident.state = 'walking';
+  resident.fleeing = false;
+  resident.fleeTimer = 0;
+  resident.fleeTarget = null;
+}
+
+for (const resident of residentPopulation) planResidentRoute(resident, resident.targetIndex);
+
+function addResidentMesh(parent, geometry, material, position) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  parent.add(mesh);
+  return mesh;
+}
+
+function buildResidentModel(resident) {
+  const palette = residentClothingPalettes[resident.styleIndex % residentClothingPalettes.length];
+  const root = new THREE.Group();
+  root.name = `village-${resident.id}`;
+  root.userData.residentId = resident.id;
+  const body = new THREE.Group();
+  root.add(body);
+  addResidentMesh(body, residentGeometry.pelvis, palette.trousers, [0, 0.76, 0]);
+  addResidentMesh(body, residentGeometry.torso, palette.coat, [0, 1.12, 0]);
+  addResidentMesh(body, residentGeometry.neck, residentSkinMaterial, [0, 1.48, 0]);
+  const head = new THREE.Group();
+  head.position.set(0, 1.54, 0);
+  body.add(head);
+  addResidentMesh(head, residentGeometry.head, residentSkinMaterial, [0, 0.2, 0]);
+  addResidentMesh(head, residentGeometry.hair, residentHairMaterials[resident.styleIndex % residentHairMaterials.length], [0, 0.4, -0.005]);
+
+  const arms = [];
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Group();
+    arm.position.set(side * 0.29, 1.39, 0);
+    body.add(arm);
+    addResidentMesh(arm, residentGeometry.upperArm, palette.coat, [0, -0.18, 0]);
+    const forearm = new THREE.Group();
+    forearm.position.y = -0.35;
+    arm.add(forearm);
+    addResidentMesh(forearm, residentGeometry.lowerArm, palette.coat, [0, -0.17, 0]);
+    addResidentMesh(forearm, residentGeometry.hand, residentSkinMaterial, [0, -0.39, 0]);
+    arms.push(arm);
+  }
+
+  const legs = [];
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Group();
+    leg.position.set(side * 0.115, 0.82, 0);
+    body.add(leg);
+    addResidentMesh(leg, residentGeometry.thigh, palette.trousers, [0, -0.21, 0]);
+    const shin = new THREE.Group();
+    shin.position.y = -0.41;
+    leg.add(shin);
+    addResidentMesh(shin, residentGeometry.shin, palette.trousers, [0, -0.18, 0]);
+    addResidentMesh(shin, residentGeometry.boot, residentBootMaterial, [0, -0.39, 0.06]);
+    legs.push(leg);
+  }
+  root.position.set(resident.x, terrainHeightAt(resident.x), resident.z);
+  root.rotation.y = resident.yaw;
+  scene.add(root);
+  return { root, head, arms, legs };
+}
+
+function selectResidentModels() {
+  const playerX = playerBody.position.x;
+  const playerZ = playerBody.position.z;
+  const desired = selectActiveResidents(residentPopulation, playerX, playerZ, MAX_ACTIVE_RESIDENTS, RESIDENT_VISIBILITY_RADIUS);
+  const candidates = new Set(desired);
+  const retentionSquared = RESIDENT_RETENTION_RADIUS * RESIDENT_RETENTION_RADIUS;
+  for (const resident of activeVillageResidents) {
+    const dx = resident.x - playerX;
+    const dz = resident.z - playerZ;
+    if (dx * dx + dz * dz <= retentionSquared) candidates.add(resident);
+  }
+  const nextActive = [...candidates]
+    .sort((a, b) => {
+      const adx = a.x - playerX, adz = a.z - playerZ;
+      const bdx = b.x - playerX, bdz = b.z - playerZ;
+      return adx * adx + adz * adz - (bdx * bdx + bdz * bdz) || a.index - b.index;
+    })
+    .slice(0, MAX_ACTIVE_RESIDENTS);
+  const nextSet = new Set(nextActive);
+  for (const resident of activeVillageResidents) {
+    if (nextSet.has(resident)) continue;
+    if (resident.visual?.root) scene.remove(resident.visual.root);
+    resident.visual = null;
+    resident.active = false;
+  }
+  for (const resident of nextActive) {
+    if (!resident.visual) resident.visual = buildResidentModel(resident);
+    resident.active = true;
+  }
+  activeVillageResidents = nextSet;
+}
+
+function playerIsArmedAndRunning() {
+  const armed = Boolean(currentWeaponId) || Boolean(heldBody?.gameMeta?.weaponId);
+  const sprinting = sprintHeld || keys.has('ShiftLeft') || keys.has('ShiftRight') || Math.hypot(joystick.x, joystick.y) > 0.84;
+  return armed && (sprinting || Math.hypot(playerBody.velocity.x, playerBody.velocity.z) > 5.2);
+}
+
+function moveResidentToward(resident, destination, speed, dt) {
+  const dx = destination.x - resident.x;
+  const dz = destination.z - resident.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance < 0.035) return true;
+  resident.yaw = Math.atan2(dx, dz);
+  const step = Math.min(distance, speed * dt);
+  resident.x += dx / distance * step;
+  resident.z += dz / distance * step;
+  return distance <= step + 0.035;
+}
+
+function advanceResident(resident, dt, playerThreat = false) {
+  if (playerThreat) {
+    const awayX = resident.x - playerBody.position.x;
+    const awayZ = resident.z - playerBody.position.z;
+    const distance = Math.hypot(awayX, awayZ);
+    if (distance < 28 && (!resident.fleeing || resident.fleeTimer < 0.75)) {
+      const angle = distance > 0.1 ? Math.atan2(awayX, awayZ) : resident.index * 2.399963229728653;
+      const length = 16 + (resident.index % 5) * 1.4;
+      resident.fleeTarget = {
+        x: THREE.MathUtils.clamp(resident.x + Math.sin(angle) * length, VILLAGE_BOUNDS.minX + 3, VILLAGE_BOUNDS.maxX - 3),
+        z: THREE.MathUtils.clamp(resident.z + Math.cos(angle) * length, VILLAGE_BOUNDS.minZ + 3, VILLAGE_BOUNDS.maxZ - 3)
+      };
+      resident.fleeing = true;
+      resident.fleeTimer = 4.8;
+      resident.dwellTimer = 0;
+    }
+  }
+
+  if (resident.fleeing && resident.fleeTarget) {
+    resident.state = 'fleeing';
+    resident.fleeTimer = Math.max(0, resident.fleeTimer - dt);
+    const reached = moveResidentToward(resident, resident.fleeTarget, resident.moveSpeed * 3.05, dt);
+    if (reached || resident.fleeTimer <= 0) planResidentRoute(resident, resident.targetIndex);
+    resident.walkPhase += dt * resident.moveSpeed * 10;
+    return;
+  }
+  if (resident.dwellTimer > 0) {
+    resident.dwellTimer = Math.max(0, resident.dwellTimer - dt);
+    resident.state = 'idle';
+    if (resident.dwellTimer === 0 && resident.pathIndex >= resident.path.length) {
+      planResidentRoute(resident, (resident.targetIndex + 1) % 3);
+    }
+    return;
+  }
+  if (resident.pathIndex >= resident.path.length) {
+    resident.currentLocation = resident.targetIndex;
+    resident.dwellTimer = 2.5 + (resident.index % 6) * 0.55;
+    resident.state = 'idle';
+    return;
+  }
+  const waypoint = resident.path[resident.pathIndex];
+  if (moveResidentToward(resident, waypoint, resident.moveSpeed, dt)) resident.pathIndex++;
+  resident.walkPhase += dt * resident.moveSpeed * 3.5;
+  resident.state = 'walking';
+  if (resident.pathIndex >= resident.path.length) {
+    resident.currentLocation = resident.targetIndex;
+    resident.dwellTimer = 2.5 + (resident.index % 6) * 0.55;
+    resident.state = 'idle';
+    return;
+  }
+  // Keep the slow, off-screen simulation moving without spawning a model for this resident.
+}
+
+function updateResidentVisual(resident, dt) {
+  const visual = resident.visual;
+  if (!visual) return;
+  const { root, head, arms, legs } = visual;
+  const moving = resident.state === 'walking' || resident.state === 'fleeing';
+  const stride = moving ? (resident.state === 'fleeing' ? 0.9 : 0.48) : 0.025;
+  const phase = resident.walkPhase;
+  arms[0].rotation.x = Math.sin(phase) * stride;
+  arms[1].rotation.x = -Math.sin(phase) * stride;
+  legs[0].rotation.x = -Math.sin(phase) * stride;
+  legs[1].rotation.x = Math.sin(phase) * stride;
+  const bob = moving ? Math.abs(Math.sin(phase * 2)) * (resident.state === 'fleeing' ? 0.055 : 0.022) : 0;
+  root.position.set(resident.x, terrainHeightAt(resident.x) + bob, resident.z);
+  root.rotation.y = resident.yaw;
+  const dx = playerBody.position.x - resident.x;
+  const dz = playerBody.position.z - resident.z;
+  if (Math.hypot(dx, dz) < 34) {
+    let relativeYaw = Math.atan2(dx, dz) - resident.yaw;
+    relativeYaw = THREE.MathUtils.euclideanModulo(relativeYaw + Math.PI, Math.PI * 2) - Math.PI;
+    head.rotation.y = THREE.MathUtils.damp(head.rotation.y, THREE.MathUtils.clamp(relativeYaw, -0.85, 0.85), 4.5, dt);
+  } else {
+    head.rotation.y = THREE.MathUtils.damp(head.rotation.y, 0, 2.5, dt);
+  }
+}
+
+function updateVillageResidents(dt) {
+  residentSimulationTimer += dt;
+  if (residentSimulationTimer >= 0.5) {
+    const backgroundStep = Math.min(1.25, residentSimulationTimer);
+    residentSimulationTimer = 0;
+    for (const resident of residentPopulation) {
+      if (!resident.active) advanceResident(resident, backgroundStep, false);
+    }
+  }
+  residentActivationTimer += dt;
+  if (activeVillageResidents.size === 0 || residentActivationTimer >= 0.4) {
+    selectResidentModels();
+    residentActivationTimer = 0;
+  }
+  const threat = playerIsArmedAndRunning();
+  for (const resident of activeVillageResidents) {
+    advanceResident(resident, dt, threat);
+    updateResidentVisual(resident, dt);
+  }
+}
+
 let playerFallArmed = false;
 let playerFallPeakY = playerStart.y;
 let playerMaxFallSpeed = 0;
 let playerPreviousVerticalVelocity = 0;
 
-const handGroup = new THREE.Group();
-camera.add(handGroup);
-const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x59645a, roughness: 0.86, metalness: 0.02 });
-const cuffMat = new THREE.MeshStandardMaterial({ color: 0x252e29, roughness: 0.78, metalness: 0.08 });
-const gloveMat = new THREE.MeshStandardMaterial({ color: 0x39443a, roughness: 0.91, metalness: 0.01 });
-const gloveEdge = new THREE.MeshStandardMaterial({ color: 0x202921, roughness: 0.84, metalness: 0.03 });
-const glovePad = new THREE.MeshStandardMaterial({ color: 0x56624e, roughness: 0.88, metalness: 0.02 });
 const weaponSteel = new THREE.MeshStandardMaterial({ color: 0x293238, roughness: 0.46, metalness: 0.68 });
 const weaponBlack = new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.62, metalness: 0.42 });
 const weaponPolymer = new THREE.MeshStandardMaterial({ color: 0x333a37, roughness: 0.82, metalness: 0.08 });
@@ -2085,14 +2444,15 @@ const weaponWood = new THREE.MeshStandardMaterial({ color: 0x725035, roughness: 
 const weaponWoodEdge = new THREE.MeshStandardMaterial({ color: 0x4c3726, roughness: 0.9, metalness: 0.01 });
 const weaponGlass = new THREE.MeshStandardMaterial({ color: 0x5186b2, roughness: 0.23, metalness: 0.26, emissive: 0x10233a, emissiveIntensity: 0.2 });
 const weaponView = new THREE.Group();
-handGroup.add(weaponView);
+camera.add(weaponView);
 const weaponModel = new THREE.Group();
 weaponView.add(weaponModel);
 const weaponBasePosition = new THREE.Vector3(0.28, -0.33, -0.78);
 const weaponBaseRotation = new THREE.Euler(0.25, 0.25, 0.015, 'XYZ');
 weaponView.position.copy(weaponBasePosition);
 weaponView.rotation.copy(weaponBaseRotation);
-const weaponHands = {};
+let weaponSwayX = 0;
+let weaponSwayY = 0;
 let magazineGroup = null;
 let magazineBasePosition = new THREE.Vector3(0, -0.145, 0.035);
 let pumpGroup = null;
@@ -2112,18 +2472,6 @@ let currentWeaponId = null;
 const weaponAmmo = new Map(WEAPON_CATALOG.map((weapon) => [weapon.id, createAmmoState(weapon)]));
 let gunAudioContext = null;
 let gunNoiseBuffer = null;
-const fingerRigs = [];
-let handPose = 0;
-let handTargetPose = 0;
-function setHandPose(value) { handTargetPose = heldBody ? value : 0.78; }
-function block(geometry, material, position, rotationZ = 0) {
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(position[0], position[1], position[2]);
-  mesh.rotation.z = rotationZ;
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  return mesh;
-}
 function weaponBox(parent, size, position, material, rotation = [0, 0, 0]) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
   mesh.position.set(position[0], position[1], position[2]);
@@ -2365,21 +2713,6 @@ function buildMeleeModel(weapon) {
   }
 }
 
-function setHandTarget(which, palmTarget) {
-  const hand = weaponHands[which];
-  if (!hand) return;
-  const mirrored = which === 'left' ? -1 : 1;
-  const position = new THREE.Vector3(
-    palmTarget[0] - mirrored * 0.15,
-    palmTarget[1] - 0.285,
-    palmTarget[2] + 0.025
-  );
-  hand.userData.gripPosition = position;
-  hand.userData.gripRotation = new THREE.Euler(which === 'left' ? 0.08 : -0.06, 0, which === 'left' ? 0.05 : -0.05);
-  hand.position.copy(position);
-  hand.rotation.copy(hand.userData.gripRotation);
-}
-
 function buildWeaponModel(weapon) {
   clearWeaponModel();
   if (isMeleeWeapon(weapon)) buildMeleeModel(weapon);
@@ -2388,18 +2721,16 @@ function buildWeaponModel(weapon) {
   else if (weapon.type === 'pistol') buildPistolModel(weapon);
   else if (weapon.type === 'shotgun') buildShotgunModel();
   const cameraPose = isMeleeWeapon(weapon)
-    ? { position: [0.29, -0.34, -0.82], rotation: [0.2, 0.22, 0.04], left: [-0.08, -0.10, -0.055], right: [0.07, -0.105, 0.18] }
+    ? { position: [0.29, -0.34, -0.82], rotation: [0.2, 0.22, 0.04] }
     : weapon.type === 'pistol'
-      ? { position: [0.3, -0.39, -0.69], rotation: [0.18, 0.22, 0.02], left: [-0.045, -0.14, 0.17], right: [0.035, -0.105, 0.15] }
+      ? { position: [0.3, -0.39, -0.69], rotation: [0.18, 0.22, 0.02] }
       : weapon.type === 'shotgun'
-        ? { position: [0.28, -0.34, -0.82], rotation: [0.23, 0.24, 0.015], left: [-0.09, -0.015, -0.46], right: [0.07, -0.105, 0.17] }
-        : { position: [0.28, -0.33, -0.78], rotation: [0.25, 0.25, 0.015], left: [-0.09, -0.015, -0.39], right: [0.07, -0.105, 0.17] };
+        ? { position: [0.28, -0.34, -0.82], rotation: [0.23, 0.24, 0.015] }
+        : { position: [0.28, -0.33, -0.78], rotation: [0.25, 0.25, 0.015] };
   weaponBasePosition.set(...cameraPose.position);
   weaponBaseRotation.set(...cameraPose.rotation, 'XYZ');
   weaponView.position.copy(weaponBasePosition);
   weaponView.rotation.copy(weaponBaseRotation);
-  setHandTarget('left', cameraPose.left);
-  setHandTarget('right', cameraPose.right);
   const muzzleZ = weapon.type === 'pistol' ? -0.43 : weapon.type === 'shotgun' ? -1.38 : isMeleeWeapon(weapon) ? 0 : -1.09;
   muzzleFlash.position.set(0, weapon.type === 'shotgun' ? 0.052 : 0.025, muzzleZ);
   muzzleFlash.visible = false;
@@ -2412,6 +2743,7 @@ function currentWeaponAmmo() { return currentWeaponId ? weaponAmmo.get(currentWe
 function equipWeapon(id, announce = true) {
   const weapon = WEAPON_BY_ID.get(id);
   if (!weapon) return false;
+  if (currentWeaponId && currentWeaponId !== id) dropEquippedWeapon(false, false);
   currentWeaponId = id;
   fireHeld = false;
   fireCooldown = 0;
@@ -2425,87 +2757,112 @@ function equipWeapon(id, announce = true) {
   weaponRecoil = 0;
   muzzleFlashTimer = 0;
   buildWeaponModel(weapon);
+  weaponView.visible = !dead && !heldBody;
   updateAmmoHUD();
+  updateDropButton();
   if (announce) toast(`${weapon.name.toUpperCase()} · ГОТОВО`, 0.9);
   return true;
 }
 
-function buildHand(side) {
-  const group = new THREE.Group();
-  const mirrored = side < 0 ? -1 : 1;
-  const forearm = block(new THREE.BoxGeometry(0.145, 0.33, 0.17), sleeveMat, [-mirrored * 0.045, -0.065, 0], mirrored * 0.37);
-  group.add(forearm);
-  const forearmSeam = block(new THREE.BoxGeometry(0.152, 0.018, 0.176), gloveEdge, [-mirrored * 0.018, 0.058, -0.002], mirrored * 0.37);
-  group.add(forearmSeam);
-  const cuff = block(new THREE.BoxGeometry(0.18, 0.075, 0.19), cuffMat, [mirrored * 0.082, 0.19, -0.006], mirrored * 0.37);
-  group.add(cuff);
-  group.add(block(new THREE.BoxGeometry(0.145, 0.018, 0.194), glovePad, [mirrored * 0.082, 0.166, -0.006], mirrored * 0.37));
-
-  const palm = new THREE.Group();
-  palm.position.set(mirrored * 0.15, 0.285, -0.025);
-  palm.rotation.z = -mirrored * 0.06;
-  group.add(palm);
-  palm.add(block(new THREE.BoxGeometry(0.225, 0.165, 0.112), gloveMat, [0, 0, 0]));
-  palm.add(block(new THREE.BoxGeometry(0.135, 0.074, 0.012), glovePad, [0, 0.005, -0.062]));
-  palm.add(block(new THREE.BoxGeometry(0.084, 0.018, 0.018), gloveEdge, [0, -0.071, -0.052]));
-  palm.add(block(new THREE.BoxGeometry(0.196, 0.025, 0.018), gloveEdge, [0, 0.067, -0.057]));
-
-  const fingerLengths = [0.081, 0.094, 0.087, 0.071];
-  for (let i = 0; i < 4; i++) {
-    const finger = new THREE.Group();
-    const proximalLength = fingerLengths[i] * 0.59;
-    const distalLength = fingerLengths[i] * 0.41;
-    finger.position.set((i - 1.5) * 0.052, 0.078, -0.018);
-    palm.add(finger);
-    finger.add(block(new THREE.BoxGeometry(0.041, proximalLength, 0.076), gloveMat, [0, proximalLength * 0.5, 0]));
-    finger.add(block(new THREE.BoxGeometry(0.044, 0.022, 0.078), glovePad, [0, proximalLength - 0.008, -0.004]));
-    const distal = new THREE.Group();
-    distal.position.y = proximalLength - 0.004;
-    finger.add(distal);
-    distal.add(block(new THREE.BoxGeometry(0.037, distalLength, 0.071), gloveMat, [0, distalLength * 0.48, 0]));
-    distal.add(block(new THREE.BoxGeometry(0.038, 0.015, 0.073), glovePad, [0, distalLength - 0.007, -0.002]));
-    fingerRigs.push({ base: finger, distal, fan: (i - 1.5) * 0.055, side: mirrored });
-  }
-
-  const thumb = new THREE.Group();
-  thumb.position.set(mirrored * 0.104, -0.008, -0.025);
-  thumb.rotation.z = mirrored * 0.54;
-  palm.add(thumb);
-  thumb.add(block(new THREE.BoxGeometry(0.057, 0.085, 0.078), gloveMat, [0, 0.041, 0]));
-  const thumbTip = new THREE.Group();
-  thumbTip.position.y = 0.075;
-  thumb.add(thumbTip);
-  thumbTip.add(block(new THREE.BoxGeometry(0.052, 0.067, 0.072), glovePad, [0, 0.031, -0.002]));
-  fingerRigs.push({ base: thumb, distal: thumbTip, fan: 0.54, side: mirrored, thumb: true });
-
-  const palmTarget = side < 0 ? [-0.09, -0.015, -0.39] : [0.07, -0.105, 0.17];
-  weaponView.add(group);
-  const which = side < 0 ? 'left' : 'right';
-  weaponHands[which] = group;
-  setHandTarget(which, palmTarget);
+function cloneWeaponModelForWorld() {
+  const visual = weaponModel.clone(true);
+  visual.traverse((child) => {
+    if (!child.isMesh) return;
+    child.geometry = child.geometry.clone();
+    if (Array.isArray(child.material)) child.material = child.material.map((material) => material.clone());
+    else child.material = child.material.clone();
+    child.castShadow = true;
+    child.receiveShadow = true;
+  });
+  visual.scale.setScalar(0.72);
+  return visual;
 }
-buildHand(-1);
-buildHand(1);
-handPose = handTargetPose = 0.78;
-handGroup.visible = false;
+
+function weaponPickupShape(weapon) {
+  if (weapon.type === 'pistol') return new CANNON.Box(new CANNON.Vec3(0.085, 0.055, 0.22));
+  if (weapon.id === 'shovel') return new CANNON.Box(new CANNON.Vec3(0.14, 0.065, 0.52));
+  if (weapon.type === 'melee') return new CANNON.Box(new CANNON.Vec3(0.19, 0.085, weapon.id === 'sledgehammer' ? 0.62 : 0.48));
+  return new CANNON.Box(new CANNON.Vec3(0.09, 0.065, weapon.type === 'shotgun' ? 0.72 : 0.66));
+}
+
+function dropEquippedWeapon(throwIt = true, announce = true) {
+  const weapon = currentWeapon();
+  if (!weapon) return null;
+  makeCameraDirection();
+  const x = playerBody.position.x + lookVector.x * 1.0;
+  const z = playerBody.position.z + lookVector.z * 1.0;
+  const y = Math.max(terrainHeightAt(x) + 0.68, playerBody.position.y - 0.08);
+  const visual = cloneWeaponModelForWorld();
+  const width = weapon.type === 'pistol' ? 1 : weapon.id === 'shovel' ? 2 : 2;
+  const height = weapon.type === 'pistol' ? 2 : weapon.id === 'shovel' ? 3 : 2;
+  const weaponMeta = {
+    kind: 'weapon', weaponId: weapon.id, type: weapon.id === 'shovel' ? 'ЛОПАТА' : 'ОРУЖИЕ',
+    name: weapon.name, mass: weapon.weight, range: 4.8, description: weapon.description,
+    inventoryWidth: width, inventoryHeight: height, inventoryIcon: weapon.type === 'tool' ? '⚒' : '▣'
+  };
+  const body = addPhysicsProp(weaponMeta, weaponPickupShape(weapon), weapon.weight, [x, y, z], visual, yaw);
+  const weightScale = Math.max(0.45, Math.min(1.2, Math.sqrt(2.8 / weapon.weight)));
+  const forwardSpeed = throwIt ? 7.2 * weightScale : 1.15;
+  body.velocity.set(
+    lookVector.x * forwardSpeed + playerBody.velocity.x * 0.45,
+    lookVector.y * forwardSpeed + (throwIt ? 1.15 : 0.08) + playerBody.velocity.y * 0.2,
+    lookVector.z * forwardSpeed + playerBody.velocity.z * 0.45
+  );
+  body.angularVelocity.set(throwIt ? (Math.random() - 0.5) * 3.2 : 0, throwIt ? (Math.random() - 0.5) * 3.2 : 0, throwIt ? (Math.random() - 0.5) * 2.4 : 0);
+  const worldMeta = body.gameMeta;
+  body.collisionFilterMask = worldMeta.originalCollisionFilterMask & ~COLLISION_GROUP_PLAYER;
+  worldMeta.playerCollisionSuspended = true;
+  worldMeta.playerCollisionReEnableAfter = elapsed + 0.42;
+  body.wakeUp();
+  world.broadphase.dirty = true;
+  currentWeaponId = null;
+  fireHeld = false;
+  reloadTimer = 0;
+  reloadProgress = 0;
+  muzzleFlash.visible = false;
+  muzzleFlashTimer = 0;
+  weaponModel.visible = false;
+  weaponView.visible = false;
+  updateAmmoHUD();
+  updateDropButton();
+  if (announce) toast(`${throwIt ? 'БРОСОК' : 'ПОЛОЖЕНО'} · ${weapon.name.toUpperCase()}`, 1.0);
+  return body;
+}
+
+function equipWorldWeapon(meta) {
+  const weaponId = meta?.weaponId || (meta?.type === 'ЛОПАТА' ? 'shovel' : null);
+  const weapon = WEAPON_BY_ID.get(weaponId);
+  if (!weapon || meta.isStored || meta.isHeld) return false;
+  const recordIndex = physicsRecords.findIndex((record) => record.body === meta.body);
+  if (recordIndex < 0) return false;
+  const [record] = physicsRecords.splice(recordIndex, 1);
+  world.removeBody(record.body);
+  scene.remove(record.visual);
+  for (let i = raycastTargets.length - 1; i >= 0; i--) {
+    if (raycastTargets[i] === record.visual) raycastTargets.splice(i, 1);
+  }
+  meta.isHeld = false;
+  meta.isStored = false;
+  world.broadphase.dirty = true;
+  if (!equipWeapon(weapon.id, false)) return false;
+  toast(`${weapon.name.toUpperCase()} · ЭКИПИРОВАНО`, 1.0);
+  updateTargetUI();
+  return true;
+}
+
 weaponView.visible = false;
 weaponModel.visible = false;
-function updateHandPose(dt) {
-  handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
-  for (const rig of fingerRigs) {
-    if (rig.thumb) {
-      rig.base.rotation.x = -handPose * 0.6;
-      rig.base.rotation.z = rig.side * (0.54 + handPose * 0.62);
-      rig.distal.rotation.x = -handPose * 0.9;
-    } else {
-      rig.base.rotation.x = -handPose * 0.58;
-      rig.base.rotation.z = rig.fan * (0.25 + handPose * 0.25);
-      rig.distal.rotation.x = -handPose * 1.28;
-    }
-  }
+
+function updateDropButton() {
+  const button = $('drop-button');
+  if (!button) return;
+  const shouldShow = Boolean(currentWeaponId || heldBody) && !dead;
+  button.hidden = !shouldShow;
+  button.setAttribute('aria-label', heldBody ? 'Выбросить удерживаемый предмет' : 'Выбросить экипированный предмет');
 }
 
 function updateAmmoHUD() {
+  updateDropButton();
   const weapon = currentWeapon();
   const ammo = currentWeaponAmmo();
   const controls = document.querySelector('.weapon-controls');
@@ -2830,7 +3187,6 @@ function updateWeapon(dt) {
     muzzleFlash.visible = false;
     weaponModel.visible = false;
     weaponView.visible = false;
-    handGroup.visible = false;
     return;
   }
   if (fireHeld && fireCooldown <= 0 && reloadTimer <= 0) fireWeapon();
@@ -2858,39 +3214,31 @@ function updateWeapon(dt) {
     const actionProgress = 1 - shovelActionTimer / SHOVEL_ACTION_DURATION;
     const digging = Math.sin(actionProgress * Math.PI);
     shovelActionTimer = Math.max(0, shovelActionTimer - dt);
-    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - digging * 0.17, weaponBasePosition.z + digging * 0.16);
+    weaponView.position.set(weaponBasePosition.x + weaponSwayX, weaponBasePosition.y + weaponSwayY - digging * 0.17, weaponBasePosition.z + digging * 0.16);
     weaponView.rotation.set(weaponBaseRotation.x + digging * 0.52, weaponBaseRotation.y + digging * 0.04, weaponBaseRotation.z - digging * 0.12);
     if (shovelActionTimer === 0) finishSnowAction();
   } else if (meleeTimer > 0) {
     meleeTimer = Math.max(0, meleeTimer - dt);
     const swingProgress = 1 - meleeTimer / weapon.swingDuration;
     const swing = Math.sin(swingProgress * Math.PI);
-    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - swing * 0.12, weaponBasePosition.z + swing * 0.08);
+    weaponView.position.set(weaponBasePosition.x + weaponSwayX, weaponBasePosition.y + weaponSwayY - swing * 0.12, weaponBasePosition.z + swing * 0.08);
     weaponView.rotation.set(weaponBaseRotation.x + swing * 0.36, weaponBaseRotation.y - swing * 0.12, weaponBaseRotation.z - swing * 0.92);
     if (!meleeHitApplied && swingProgress >= 0.43) {
       meleeHitApplied = true;
       traceMeleeHit(weapon);
     }
   } else {
-    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - weaponRecoil * 0.035 - reloadMotion * 0.07, weaponBasePosition.z + weaponRecoil * 0.065);
+    weaponView.position.set(weaponBasePosition.x + weaponSwayX, weaponBasePosition.y + weaponSwayY - weaponRecoil * 0.035 - reloadMotion * 0.07, weaponBasePosition.z + weaponRecoil * 0.065);
     weaponView.rotation.set(weaponBaseRotation.x + weaponRecoil * 0.11 - reloadMotion * 0.08, weaponBaseRotation.y, weaponBaseRotation.z + reloadMotion * 0.07);
   }
   if (magazineGroup) {
     magazineGroup.position.set(magazineBasePosition.x, magazineBasePosition.y - reloadMotion * 0.18, magazineBasePosition.z + reloadMotion * 0.035);
     magazineGroup.rotation.x = -reloadMotion * 0.24;
   }
-  if (weaponHands.left) {
-    const grip = weaponHands.left.userData.gripPosition;
-    const rotation = weaponHands.left.userData.gripRotation;
-    if (grip && rotation) {
-      weaponHands.left.position.set(grip.x, grip.y - reloadMotion * 0.11, grip.z + reloadMotion * 0.12);
-      weaponHands.left.rotation.set(rotation.x - reloadMotion * 0.22, rotation.y, rotation.z);
-    }
-  }
   if (pumpGroup && reloadTimer > 0) pumpGroup.position.z = pumpBasePosition.z + reloadMotion * 0.08;
   if (snowPayload) snowPayload.visible = carriedSnow > 0 && !heldBody;
   weaponModel.visible = !heldBody;
-  weaponView.visible = !dead && Boolean(weapon);
+  weaponView.visible = !dead && Boolean(weapon) && !heldBody;
 }
 
 // Separate low-poly operator preview for the inventory screen. The model is original and uses block-based geometry.
@@ -2938,7 +3286,7 @@ previewBox(inventoryActor, [0.075, 0.105, 0.085], [0.145, 1.59, 0.16], previewMa
 for (const side of [-1, 1]) {
   previewBox(inventoryActor, [0.18, 0.46, 0.2], [side * 0.35, 1.05, 0], previewJacket, [0, 0, side * -0.06]);
   previewBox(inventoryActor, [0.15, 0.37, 0.17], [side * 0.39, 0.67, 0.025], previewArmor, [0, 0, side * 0.025]);
-  previewBox(inventoryActor, [0.15, 0.11, 0.15], [side * 0.39, 0.42, 0.035], gloveMat);
+  previewBox(inventoryActor, [0.15, 0.11, 0.15], [side * 0.39, 0.42, 0.035], previewSkin);
   previewBox(inventoryActor, [0.19, 0.43, 0.22], [side * 0.125, 0.36, 0], previewPants);
   previewBox(inventoryActor, [0.16, 0.34, 0.18], [side * 0.13, 0.17, 0.015], previewPants);
   previewBox(inventoryActor, [0.2, 0.13, 0.3], [side * 0.13, 0.065, 0.07], previewBoots);
@@ -3091,7 +3439,7 @@ function triggerDeath(reason = 'КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ') 
   resetJoystick();
   lookState = null;
   playerBody.velocity.set(0, 0, 0);
-  setHandPose(0);
+  updateDropButton();
   if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
 }
 
@@ -3177,15 +3525,34 @@ function makeCameraDirection() {
   return lookVector;
 }
 
+function getNearbyPickupTarget() {
+  const playerFeetY = playerBody.position.y - 0.87;
+  let nearest = null;
+  let nearestDistance = 1.6;
+  for (const record of physicsRecords) {
+    const body = record.body;
+    const meta = body.gameMeta;
+    if (!meta || meta.isStored || meta.isHeld || !['prop', 'firewood', 'weapon'].includes(meta.kind)) continue;
+    const dx = body.position.x - playerBody.position.x;
+    const dz = body.position.z - playerBody.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance > nearestDistance || Math.abs(body.position.y - playerFeetY) > 1.65) continue;
+    nearest = { meta, distance, point: new THREE.Vector3(body.position.x, body.position.y, body.position.z), steppedOn: true };
+    nearestDistance = distance;
+  }
+  return nearest;
+}
+
 function getTargetMeta() {
+  camera.updateMatrixWorld(true);
   raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
   const hits = raycaster.intersectObjects(raycastTargets, true);
   for (const hit of hits) {
     const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-    if (!meta || meta.isStored || meta.isEmpty || hit.distance > (meta.range || 4.5)) continue;
-    return { meta, distance: hit.distance, point: hit.point };
+    if (!meta || meta.isStored || meta.isEmpty || meta.isHeld || hit.distance > (meta.range || 4.5)) continue;
+    return { meta, distance: hit.distance, point: hit.point, aimed: true };
   }
-  return null;
+  return getNearbyPickupTarget();
 }
 
 function getGroundTarget() {
@@ -3243,6 +3610,7 @@ function finishSnowAction() {
 }
 
 function updateTargetUI() {
+  updateDropButton();
   const action = $('action-button');
   if (!action) return;
   const label = $('action-label');
@@ -3271,6 +3639,8 @@ function updateTargetUI() {
     label.textContent = currentWeaponId === 'shovel' ? 'ЧЕРПАТЬ СНЕГ' : 'НУЖНА ЛОПАТА';
   } else if (currentTarget?.meta.kind === 'stove') {
     label.textContent = 'НУЖНЫ ДРОВА';
+  } else if (currentTarget?.meta.kind === 'weapon' || currentTarget?.meta.type === 'ЛОПАТА') {
+    label.textContent = 'ЭКИПИРОВАТЬ';
   } else if (currentTarget?.meta.kind === 'firewood' || currentTarget?.meta.kind === 'prop') {
     label.textContent = 'ВЗЯТЬ';
   }
@@ -3289,8 +3659,7 @@ function pickUp(meta) {
   if (!body || body.gameMeta?.isHeld || meta.isStored) return;
   heldBody = body;
   body.gameMeta.isHeld = true;
-  // Keep the item dynamic so the floor/walls still stop it, but remove the player bit from
-  // the mutual collision mask. This is the important GMod-style hand/player separation.
+  // Keep grabbed props dynamic while removing player collision so they can move in front of the camera.
   body.type = CANNON.Body.DYNAMIC;
   body.mass = body.gameMeta.initialMass;
   body.gameMeta.playerCollisionSuspended = false;
@@ -3303,7 +3672,9 @@ function pickUp(meta) {
   body.force.set(0, 0, 0);
   body.wakeUp();
   world.broadphase.dirty = true;
-  setHandPose(1);
+  weaponModel.visible = false;
+  weaponView.visible = false;
+  updateDropButton();
   toast(`${meta.name} · ${meta.mass.toFixed(1)} КГ`, 1.15);
 }
 
@@ -3334,7 +3705,7 @@ function throwHeld() {
   body.wakeUp();
   world.broadphase.dirty = true;
   heldBody = null;
-  setHandPose(0);
+  updateDropButton();
   toast(`БРОСОК · ${meta.name}`, 0.95);
 }
 
@@ -3358,7 +3729,7 @@ function dropHeld() {
   body.wakeUp();
   world.broadphase.dirty = true;
   heldBody = null;
-  setHandPose(0);
+  updateDropButton();
   toast(`ПОЛОЖЕНО · ${meta.name}`, 0.95);
 }
 
@@ -3376,7 +3747,7 @@ function releaseHeldAfterDeath() {
   body.wakeUp();
   heldBody = null;
   world.broadphase.dirty = true;
-  setHandPose(0);
+  updateDropButton();
 }
 
 function inventoryWeight() {
@@ -3396,6 +3767,29 @@ function findInventorySlot(width, height) {
   return null;
 }
 
+function seedTestSandboxInventory() {
+  if (!TEST_SANDBOX) return;
+  const starterKit = [
+    { weaponId: 'shovel', x: 0, y: 0, width: 2, height: 3 },
+    { weaponId: 'glock-17', x: 2, y: 0, width: 1, height: 2 },
+    { weaponId: 'ak-47', x: 3, y: 0, width: 2, height: 3 }
+  ];
+  for (const slot of starterKit) {
+    const weapon = WEAPON_BY_ID.get(slot.weaponId);
+    inventoryItems.push({
+      id: `sandbox-${weapon.id}`,
+      meta: {
+        kind: 'gear', weaponId: weapon.id,
+        type: weapon.type === 'tool' ? 'ЛОПАТА' : weapon.type === 'rifle' ? 'АВТОМАТ' : 'ПИСТОЛЕТ',
+        name: weapon.name, mass: weapon.weight, description: weapon.description,
+        inventoryIcon: weapon.type === 'tool' ? '⚒' : weapon.type === 'rifle' ? '⌁' : '▣'
+      },
+      x: slot.x, y: slot.y, width: slot.width, height: slot.height
+    });
+  }
+  selectedInventoryId = 'sandbox-shovel';
+}
+
 function selectInventoryItem(id) {
   const item = inventoryItems.find((entry) => entry.id === id);
   if (!item) return;
@@ -3405,8 +3799,10 @@ function selectInventoryItem(id) {
   $('inventory-selected-weight').textContent = `${item.meta.mass.toFixed(1)} кг`;
   $('inventory-selected-description').textContent = item.meta.description || item.meta.detail || 'Предмет без дополнительных сведений.';
   const takeButton = $('inventory-take');
-  takeButton.disabled = Boolean(heldBody);
-  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : 'ДОСТАТЬ ПРЕДМЕТ';
+  const isGear = Boolean(item.meta.weaponId);
+  const alreadyEquipped = isGear && currentWeaponId === item.meta.weaponId;
+  takeButton.disabled = Boolean(heldBody) || alreadyEquipped;
+  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : alreadyEquipped ? 'УЖЕ ЭКИПИРОВАНО' : isGear ? 'ЭКИПИРОВАТЬ' : 'ДОСТАТЬ ПРЕДМЕТ';
   $('inventory-message').textContent = `${item.meta.type} · ${item.width} × ${item.height} ЯЧЕЙКИ`;
   for (const button of $('inventory-grid').querySelectorAll('.inventory-item')) {
     button.classList.toggle('selected', button.dataset.itemId === id);
@@ -3488,8 +3884,10 @@ function updateInventorySelection() {
   $('inventory-selected-name').textContent = item.meta.name;
   $('inventory-selected-weight').textContent = `${item.meta.mass.toFixed(1)} кг`;
   $('inventory-selected-description').textContent = item.meta.description || item.meta.detail || 'Предмет без дополнительных сведений.';
-  takeButton.disabled = Boolean(heldBody);
-  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : 'ДОСТАТЬ ПРЕДМЕТ';
+  const isGear = Boolean(item.meta.weaponId);
+  const alreadyEquipped = isGear && currentWeaponId === item.meta.weaponId;
+  takeButton.disabled = Boolean(heldBody) || alreadyEquipped;
+  takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : alreadyEquipped ? 'УЖЕ ЭКИПИРОВАНО' : isGear ? 'ЭКИПИРОВАТЬ' : 'ДОСТАТЬ ПРЕДМЕТ';
 }
 
 function updateArmoryUI() {
@@ -3675,7 +4073,7 @@ function storeHeldInInventory() {
   world.removeBody(body);
   scene.remove(record.visual);
   heldBody = null;
-  setHandPose(0);
+  updateDropButton();
   const item = {
     id: `bag-${++inventorySequence}`,
     meta, body, visual: record.visual,
@@ -3699,6 +4097,13 @@ function takeInventoryItem(id) {
   const index = inventoryItems.findIndex((item) => item.id === id);
   if (index < 0) return;
   const [item] = inventoryItems.splice(index, 1);
+  if (item.meta.weaponId) {
+    equipWeapon(item.meta.weaponId);
+    setInventoryOpen(false);
+    updateInventoryUI();
+    updateTargetUI();
+    return;
+  }
   const { body, visual, meta } = item;
   meta.isStored = false;
   body.type = CANNON.Body.DYNAMIC;
@@ -3733,7 +4138,7 @@ function feedStoveWithHeldWood() {
     if (raycastTargets[i].userData.gameMeta === meta) raycastTargets.splice(i, 1);
   }
   world.broadphase.dirty = true;
-  setHandPose(0);
+  updateDropButton();
   stoveFuel += 52;
   stoveLit = true;
   if (stoveDoorGlow) stoveDoorGlow.visible = true;
@@ -3746,7 +4151,14 @@ function feedStoveWithHeldWood() {
 function doAction() {
   if (dead || !started || inventoryOpen || menuOpen) return;
   if (heldBody) {
-    if (!feedStoveWithHeldWood()) throwHeld();
+    if (!feedStoveWithHeldWood()) dropHeld();
+    updateTargetUI();
+    return;
+  }
+  const target = getTargetMeta();
+  currentTarget = target;
+  if (target && (target.meta.kind === 'weapon' || target.meta.type === 'ЛОПАТА')) {
+    equipWorldWeapon(target.meta);
     return;
   }
   if (currentWeaponId === 'shovel' && carriedSnow > 0) {
@@ -3755,7 +4167,6 @@ function doAction() {
     else toast('НАПРАВЬТЕ ЛОПАТУ НА ПОЛ', 1.0);
     return;
   }
-  const target = currentTarget || getTargetMeta();
   if (!target) {
     toast('НЕТ ЦЕЛИ В ЗОНЕ ДОСЯГАЕМОСТИ', 0.9);
     return;
@@ -3774,6 +4185,7 @@ function doAction() {
   }
   if (target.meta.kind === 'firewood' || target.meta.kind === 'prop') {
     pickUp(target.meta);
+    updateTargetUI();
     return;
   }
   if (target.meta.kind === 'mannequin') {
@@ -3845,10 +4257,10 @@ function updateCamera(dt) {
     const fall = THREE.MathUtils.smoothstep(deathTimer, 0.05, 1.25);
     camera.position.set(playerBody.position.x, playerBody.position.y + 0.77 - fall * 0.68, playerBody.position.z);
     camera.rotation.set(pitch + fall * 0.08, yaw, -fall * 0.62, 'YXZ');
-    handGroup.visible = false;
+    weaponSwayX = 0;
+    weaponSwayY = 0;
     return;
   }
-  handGroup.visible = Boolean(currentWeaponId) && !dead;
   const moving = isMovementKeyDown();
   const bob = moving ? Math.sin(walkPhase * 2.0) * 0.026 : 0;
   const sway = moving ? Math.sin(walkPhase) * 0.012 : 0;
@@ -3856,8 +4268,8 @@ function updateCamera(dt) {
   const shakeY = shakeAmount > 0 ? (Math.random() - 0.5) * 0.036 * shakeAmount : 0;
   camera.position.set(playerBody.position.x + sway + shakeX, playerBody.position.y + 0.77 + bob + shakeY, playerBody.position.z);
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
-  handGroup.position.y = moving ? Math.sin(walkPhase * 2.0 + 0.75) * 0.012 : 0;
-  handGroup.position.x = moving ? Math.sin(walkPhase) * 0.008 : 0;
+  weaponSwayY = moving ? Math.sin(walkPhase * 2.0 + 0.75) * 0.012 : 0;
+  weaponSwayX = moving ? Math.sin(walkPhase) * 0.008 : 0;
 }
 
 function resetPlayerFallTracking() {
@@ -3980,7 +4392,6 @@ function animate(time) {
   }
   updatePlayer(dt);
   updateCamera(dt);
-  updateHandPose(dt);
   updateWeapon(dt);
   updateBulletMarks(dt);
   updateHeld(dt);
@@ -3993,6 +4404,7 @@ function animate(time) {
     }
   }
   updateMannequinAI(dt);
+  updateVillageResidents(dt);
   updateAuntZinaAI(dt);
   world.step(1 / 60, dt, 4);
   updatePlayerFallDamage();
@@ -4159,9 +4571,27 @@ fireButton.addEventListener('pointercancel', stopFirePointer);
 fireButton.addEventListener('lostpointercapture', stopFirePointer);
 fireButton.addEventListener('contextmenu', (event) => event.preventDefault());
 $('reload-button').addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); startReload(); });
+$('drop-button').addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (dead || inventoryOpen || menuOpen) return;
+  if (heldBody) throwHeld();
+  else if (currentWeaponId) dropEquippedWeapon(true, true);
+  updateTargetUI();
+});
 $('menu-button').addEventListener('click', () => setMenuOpen(!menuOpen));
 $('inventory-button').addEventListener('click', () => setInventoryOpen(!inventoryOpen));
 $('menu-resume').addEventListener('click', () => setMenuOpen(false));
+const sandboxButton = $('menu-sandbox');
+if (sandboxButton) {
+  sandboxButton.textContent = TEST_SANDBOX ? 'ВЫЙТИ ИЗ ПЕСОЧНИЦЫ' : 'ТЕСТОВАЯ ПЕСОЧНИЦА';
+  sandboxButton.addEventListener('click', () => {
+    const url = new URL(window.location.href);
+    if (TEST_SANDBOX) url.searchParams.delete('sandbox');
+    else url.searchParams.set('sandbox', 'test');
+    window.location.href = url.href;
+  });
+}
 $('menu-restart').addEventListener('click', () => window.location.reload());
 $('menu-overlay').addEventListener('click', (event) => { if (event.target === $('menu-overlay')) setMenuOpen(false); });
 $('inventory-close').addEventListener('click', () => setInventoryOpen(false));
@@ -4216,9 +4646,14 @@ document.addEventListener('keydown', (event) => {
     else if (started) setMenuOpen(true);
     return;
   }
-  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyR', 'Space'].includes(event.code)) event.preventDefault();
+  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyG', 'KeyR', 'Space'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
   if (event.code === 'KeyE' && !event.repeat && !inventoryOpen) doAction();
+  if (event.code === 'KeyG' && !event.repeat && !inventoryOpen) {
+    if (heldBody) throwHeld();
+    else if (currentWeaponId) dropEquippedWeapon(true, true);
+    updateTargetUI();
+  }
   if (event.code === 'KeyR' && !event.repeat) startReload();
   if (event.code === 'Space' && !inventoryOpen) {
     fireHeld = true;
@@ -4232,6 +4667,7 @@ document.addEventListener('keyup', (event) => {
 document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); resetSprint(); lookState = null; fireHeld = false; firePointerId = null; } });
 window.addEventListener('blur', () => { keys.clear(); fireHeld = false; firePointerId = null; resetJoystick(); resetSprint(); }, { passive: true });
 
+if (TEST_SANDBOX) seedTestSandboxInventory();
 updateAmmoHUD();
 updateHealthHUD();
 updateNeedsHUD();

@@ -70,12 +70,14 @@ assert.match(inventoryHtml, /id="inventory-tab-all"[^>]*>ВСЕ ПРЕДМЕТЫ
 assert.match(inventoryHtml, /id="inventory-all-grid"/, 'the creative arsenal grid should be present');
 assert.match(mainSource, /function createBulletMark\(/, 'wall hits should create persistent bullet marks');
 assert.match(mainSource, /currentWeaponId = null/, 'the player should spawn without an equipped weapon');
-assert.match(mainSource, /let inventoryItems = \[\]/, 'the backpack should start empty');
-assert.match(mainSource, /handGroup\.visible = false/, 'first-person hands should start hidden');
+assert.match(mainSource, /let inventoryItems = \[\]/, 'the normal-game backpack should start empty');
+assert.match(mainSource, /if \(TEST_SANDBOX\) seedTestSandboxInventory\(\)/, 'the test kit must only be added in the separate sandbox mode');
+assert.match(inventoryHtml, /id="menu-sandbox"/, 'the test sandbox should be a separate menu entry');
+assert.doesNotMatch(mainSource, /handGroup|weaponHands|buildHand\s*\(/, 'first-person hands and fists must not exist in the view model');
 assert.match(mainSource, /bulletSurfaceTargets\.push\(mesh\)/, 'village building surfaces must be included in bullet raycasts');
-assert.match(mainSource, /handGroup\.visible = Boolean\(currentWeaponId\) && !dead/, 'FP hands must stay hidden unless a weapon is equipped');
-assert.match(mainSource, /weaponView\.visible = !dead && Boolean\(weapon\)/, 'an unarmed player must not render the weapon-and-hands view model');
+assert.match(mainSource, /weaponView\.visible = !dead && !heldBody/, 'only a held item or weapon model may appear in the first-person view');
+assert.match(mainSource, /weaponView\.visible = false/, 'the first-person item view should begin hidden');
 assert.match(mainSource, /ragdollPart\.body\.type = CANNON\.Body\.DYNAMIC/, 'weapon impacts should switch a mannequin to ragdoll physics');
 assert.match(mainSource, /damageMannequin\(human, weapon, meta\.key/, 'weapon hits should subtract mannequin health');
 
-console.log('arsenal OK: 9 weapons plus the shovel tool, unique sound profiles, per-weapon magazines/reloads, damage, hitscan and hidden empty hands');
+console.log('arsenal OK: 9 weapons plus the shovel tool, separate test kit, unique sounds, magazines/reloads, damage, hitscan and no first-person hands');

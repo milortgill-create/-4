@@ -347,6 +347,31 @@ body.damage-flash .vignette { background: radial-gradient(ellipse at center, rgb
   padding: 0 11px;
 }
 .weapon-controls { position: relative; display: none; }
+.drop-button {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  bottom: calc(100% + 8px);
+  min-width: 96px;
+  height: 34px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(231, 187, 132, .56);
+  border-radius: 4px;
+  color: #f0d8b5;
+  background: linear-gradient(145deg, rgba(83, 57, 37, .94), rgba(28, 28, 24, .96));
+  box-shadow: 0 5px 16px rgba(0,0,0,.3);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  touch-action: manipulation;
+}
+.drop-button[hidden] { display: none; }
+.drop-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.drop-button:active { transform: scale(.96); filter: brightness(1.25); }
 .fire-button {
   width: 78px;
   height: 72px;
@@ -412,7 +437,7 @@ body.damage-flash .vignette { background: radial-gradient(ellipse at center, rgb
 }
 .menu-kicker { color: #92a18f; font-size: 7px; letter-spacing: .2em; }
 .menu-panel h2 { margin: 10px 0 18px; color: #e4e8dc; font-size: 19px; letter-spacing: .18em; }
-.menu-resume, .menu-restart {
+.menu-resume, .menu-sandbox, .menu-restart {
   width: 100%;
   min-height: 38px;
   margin-top: 7px;
@@ -424,8 +449,9 @@ body.damage-flash .vignette { background: radial-gradient(ellipse at center, rgb
   font-weight: 700;
   letter-spacing: .12em;
 }
+.menu-sandbox { border-color: rgba(134, 183, 163, .38); color: #bdd6c7; background: rgba(48, 84, 70, .2); }
 .menu-restart { border-color: rgba(190, 140, 100, .32); color: #cdbba4; background: rgba(86, 59, 39, .19); }
-.menu-resume:active, .menu-restart:active { filter: brightness(1.25); }
+.menu-resume:active, .menu-sandbox:active, .menu-restart:active { filter: brightness(1.25); }
 body.dead .corner-controls, body.dead .combat-controls, body.dead .aim-reticle { opacity: 0; pointer-events: none; }
 
 @media (max-width: 760px) {
@@ -439,6 +465,7 @@ body.dead .corner-controls, body.dead .combat-controls, body.dead .aim-reticle {
   .combat-controls .action-button { width: 125px; height: 56px; padding: 0 8px; gap: 7px; }
   .combat-controls .action-icon { width: 29px; height: 29px; }
   .combat-controls .action-copy b { font-size: 8px; }
+  .drop-button { min-width: 90px; height: 31px; font-size: 6px; }
   .fire-button { width: 70px; height: 66px; }
   .reload-button { width: 29px; height: 29px; }
   .menu-panel { padding: 20px 22px 17px; }
@@ -451,6 +478,8 @@ body.dead .corner-controls, body.dead .combat-controls, body.dead .aim-reticle {
   .corner-button:last-child { min-width: 74px; }
   .corner-button span { font-size: 5px; letter-spacing: .035em; }
   .combat-controls .action-button { width: 106px; }
+  .drop-button { min-width: 84px; height: 30px; padding: 0 6px; gap: 4px; font-size: 5px; }
+  .drop-button svg { width: 13px; height: 13px; }
   .fire-button { width: 62px; height: 62px; }
 }
 @media (max-height: 430px) {

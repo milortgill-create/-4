@@ -47,7 +47,7 @@ assert.doesNotMatch(mainSource, /signPlate|labelPlate|labelMesh|const plaque/, '
 assert.match(mainSource, /const playerStart = new CANNON\.Vec3\(VILLAGE_LAYOUT\.stop\.x/, 'player spawn must be at the eastern bus stop');
 assert.match(mainSource, /let yaw = Math\.PI \/ 2/, 'the initial view should face west/downhill toward the village');
 assert.match(mainSource, /const blizzardCount = 1320/, 'the starting view should include a strong animated blizzard');
-assert.match(mainSource, /handGroup\.visible = Boolean\(currentWeaponId\) && !dead/, 'unarmed FP hands must remain hidden');
+assert.doesNotMatch(mainSource, /handGroup|weaponHands|buildHand\s*\(/, 'no first-person hand or fist geometry should be present');
 
 // Simulate the same overlapping, slope-matched boxes used by the game across low, middle and high zones.
 const floor = new C.Material('terrain');
