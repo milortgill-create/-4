@@ -1,10 +1,9 @@
-# POLYGON 01 — v1.7.0 «Карпятник»
+# POLYGON 01 — v1.7.1 «Карпятник: исправление запуска»
 
-Offline Android survival update: the former small test yard is now a walkable winter village built from the supplied map.
+Hotfix for the village update. Fixed the snowbank-spawn function name that stopped JavaScript initialization before the first frame, leaving the Android screen black. Added a full startup/first-frame runtime smoke test so scene-construction errors are caught by CI.
 
-- Added the western 0 m basin and the labelled Karpyatnik pond, tall grass, snowbanks and low mist; the central residential streets now contain varied wooden and brick houses, the school, shop and garages.
-- Added a smooth, physical 2% grade from the west basin through the +2 m village to the +4 m eastern plateau, textured muddy/snowy roads with tire ruts, fenced lots with walk-through gates, the bus stop, Mikhtok hangars and fenced scrap yards.
-- Moved the empty-handed spawn to the eastern bus stop, facing downhill into a dense animated blizzard. First-person hands and weapon view are hidden when no weapon is equipped.
-- Snowbanks are visible, collidable and shrink when dug with the shovel. Preserved the empty backpack, offline touch controls, survival needs, shovel, snow carrying, firewood, stove, fire and warmth mechanics.
+- The supplied village map loads into a visible, walkable 3D world with a rendered snow-covered ground, smooth physical 2% grade, roads, homes, fences, pond, school, shop, garages, Mikhtok hangars and scrap yards.
+- Start at the eastern bus stop facing west into the village; physical snowdrifts load with the scene and can be dug with the shovel.
+- Preserves the offline Android game, empty backpack, hidden FP hands when unarmed, survival needs, snow carrying, wood stove, fire and warmth.
 
-Debug-signed APK for Android 6.0+ (API 23). Gameplay assets are bundled locally; the game requires no network connection.
+Debug-signed APK for Android 6.0+ (API 23). Gameplay assets are bundled locally; no network connection is required.

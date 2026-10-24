@@ -1342,10 +1342,10 @@ function buildVillageWorld() {
   }
   finishFenceInstances();
   for (const drift of VILLAGE_LAYOUT.snowDrifts) createSnowDrift(drift.x, drift.z, drift.amount);
-  addSnowDrift(-248, -390, 0.86);
-  addSnowDrift(255, 178, 0.9);
-  addSnowDrift(126, 91, 0.82);
-  addSnowDrift(-149, 304, 0.82);
+  createSnowDrift(-248, -390, 0.86);
+  createSnowDrift(255, 178, 0.9);
+  createSnowDrift(126, 91, 0.82);
+  createSnowDrift(-149, 304, 0.82);
 
   // Interactable survival supplies are deliberately scattered through the village; the starting bag stays empty.
   const firewoodY = terrainHeightAt(stovePosition.x) + 0.105;

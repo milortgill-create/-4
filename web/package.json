@@ -9,8 +9,9 @@
     "test:behavior": "node tests/mannequin-behavior-smoke.mjs",
     "test:arsenal": "node tests/arsenal-smoke.mjs",
     "test:survival": "node tests/survival-smoke.mjs",
+    "test:runtime": "node tests/runtime-smoke.mjs",
     "test:village": "node tests/village-smoke.mjs",
-    "test": "npm run test:physics && npm run test:behavior && npm run test:arsenal && npm run test:survival && npm run test:village"
+    "test": "npm run test:physics && npm run test:behavior && npm run test:arsenal && npm run test:survival && npm run test:village && npm run test:runtime"
   },
   "dependencies": {
     "cannon-es": "0.20.0",
