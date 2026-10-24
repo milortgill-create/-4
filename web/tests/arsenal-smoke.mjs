@@ -7,6 +7,7 @@ import {
   createAmmoState,
   consumeAmmo,
   reloadAmmo,
+  classifyHitZone,
   damageMannequin,
   traceHitscan
 } from '../src/arsenal.js';
@@ -40,13 +41,26 @@ for (const weapon of WEAPON_CATALOG.filter((item) => item.type === 'melee')) {
 const soundFingerprints = WEAPON_CATALOG.map(({ sound }) => `${sound.frequency}:${sound.filter}:${sound.duration}:${sound.swing}`);
 assert.equal(new Set(soundFingerprints).size, WEAPON_CATALOG.length, 'every weapon needs its own distinct synthesized sound profile');
 
-const target = { health: 100, dead: false };
-const headshot = damageMannequin(target, WEAPON_BY_ID.get('tt'), 'head');
-assert.equal(headshot.damage, 51, 'head hit should use a distinct damage multiplier');
-assert.equal(headshot.health, 49);
-const lethal = damageMannequin(target, WEAPON_BY_ID.get('sledgehammer'), 'torso');
-assert.equal(lethal.lethal, true, 'weapon damage should be able to defeat a test dummy');
-assert.equal(lethal.health, 0);
+assert.equal(classifyHitZone('neck'), 'head', 'neck impacts should share the critical head zone');
+assert.equal(classifyHitZone('arm-left'), 'limb', 'arm impacts should be classified as a limb wound');
+assert.equal(classifyHitZone('shinR'), 'limb', 'ragdoll lower-leg hits should remain in the limb zone');
+const headTarget = { health: 100, dead: false };
+const headshot = damageMannequin(headTarget, WEAPON_BY_ID.get('glock-17'), 'head');
+assert.equal(headshot.zone, 'head');
+assert.equal(headshot.lethal, true, 'a precise head hit should kill quickly');
+assert.equal(headTarget.health, 0);
+const torsoTarget = { health: 100, dead: false };
+const torsoHit = damageMannequin(torsoTarget, WEAPON_BY_ID.get('glock-17'), 'torso');
+assert.equal(torsoHit.zone, 'torso');
+assert.equal(torsoHit.lethal, false, 'one ordinary torso hit should leave the NPC badly hurt but not always dead');
+assert.ok(torsoHit.damage >= 55 && torsoHit.damage <= 65);
+const torsoFinisher = damageMannequin(torsoTarget, WEAPON_BY_ID.get('glock-17'), 'torso');
+assert.equal(torsoFinisher.lethal, true, 'a second torso hit should finish the target quickly');
+const limbTarget = { health: 100, dead: false };
+const limbHit = damageMannequin(limbTarget, WEAPON_BY_ID.get('ak-47'), 'leg-left');
+assert.equal(limbHit.zone, 'limb');
+assert.equal(limbHit.lethal, false, 'a limb hit should injure and knock down rather than immediately kill');
+assert.ok(limbHit.health < 100);
 
 // Exercise the same Three.js hitscan helper used by gameplay: the nearer dummy blocks the wall.
 const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });

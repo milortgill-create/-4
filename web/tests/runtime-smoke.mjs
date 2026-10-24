@@ -139,7 +139,7 @@ const sandbox = {
 let source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 source = source.replace(/^import\b[\s\S]*?;\s*$/gm, '');
 source = source.replaceAll('new THREE.WebGLRenderer(', 'new TestRenderer(');
-source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts; globalThis.__auntZina = auntZina; globalThis.__updateAuntZinaAI = updateAuntZinaAI; globalThis.__updatePlayer = updatePlayer; globalThis.__keys = keys; globalThis.__joystick = joystick; globalThis.__sprintButton = sprintButton; globalThis.__isSprintHeld = () => sprintHeld; globalThis.__startGame = () => { started = true; }; globalThis.__residents = residentPopulation; globalThis.__activeResidents = () => [...activeVillageResidents]; globalThis.__updateResidents = updateVillageResidents; globalThis.__equipWeapon = equipWeapon; globalThis.__currentWeaponId = () => currentWeaponId; globalThis.__weaponView = weaponView; globalThis.__weaponModel = weaponModel; globalThis.__inventoryItems = () => inventoryItems; globalThis.__testSandbox = TEST_SANDBOX; globalThis.__getTargetMeta = getTargetMeta; globalThis.__doAction = doAction; globalThis.__takeInventoryItem = takeInventoryItem; globalThis.__addShovel = addShovel; globalThis.__updateCamera = updateCamera; globalThis.__physicsRecords = physicsRecords; globalThis.__setView = (nextYaw, nextPitch = 0) => { yaw = nextYaw; pitch = nextPitch; };';
+source += '\nglobalThis.__runFrame = animate; globalThis.__scene = scene; globalThis.__camera = camera; globalThis.__world = world; globalThis.__player = playerBody; globalThis.__renderer = renderer; globalThis.__ground = floorSurfaceMesh; globalThis.__drifts = snowDrifts; globalThis.__auntZina = auntZina; globalThis.__updateAuntZinaAI = updateAuntZinaAI; globalThis.__updatePlayer = updatePlayer; globalThis.__keys = keys; globalThis.__joystick = joystick; globalThis.__sprintButton = sprintButton; globalThis.__isSprintHeld = () => sprintHeld; globalThis.__startGame = () => { started = true; }; globalThis.__residents = residentPopulation; globalThis.__activeResidents = () => [...activeVillageResidents]; globalThis.__updateResidents = updateVillageResidents; globalThis.__equipWeapon = equipWeapon; globalThis.__currentWeaponId = () => currentWeaponId; globalThis.__weaponView = weaponView; globalThis.__weaponModel = weaponModel; globalThis.__inventoryItems = () => inventoryItems; globalThis.__testSandbox = TEST_SANDBOX; globalThis.__getTargetMeta = getTargetMeta; globalThis.__doAction = doAction; globalThis.__takeInventoryItem = takeInventoryItem; globalThis.__addShovel = addShovel; globalThis.__updateCamera = updateCamera; globalThis.__physicsRecords = physicsRecords; globalThis.__setView = (nextYaw, nextPitch = 0) => { yaw = nextYaw; pitch = nextPitch; }; globalThis.__applyWeaponHit = applyWeaponHit; globalThis.__updateResidentRagdoll = updateResidentRagdoll; globalThis.__raycastTargets = raycastTargets; globalThis.__bulletSurfaceTargets = bulletSurfaceTargets; globalThis.__bloodDecals = bloodDecals; globalThis.__bloodParticles = bloodParticles; globalThis.__triggerDeath = triggerDeath; globalThis.__isDead = () => dead; globalThis.__cleanupResidentRagdoll = cleanupResidentRagdoll;';
 
 runInNewContext(source, sandbox, { filename: 'main.js', timeout: 30_000 });
 assert.ok(sandbox.__scene.children.length > 100, 'complete village geometry should be present in the scene');
@@ -281,4 +281,84 @@ sandbox.__updateCamera(1 / 60);
 sandbox.__doAction();
 assert.equal(sandbox.__currentWeaponId(), 'shovel', 'the dropped shovel should be recoverable with Action');
 
-console.log(`runtime OK: village (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} bodies), streamed residents and flee, no first-person hands, test backpack, quick pickup, throw and recovery`);
+const ragdollResident = sandbox.__activeResidents().find((resident) => !resident.dead && !resident.ragdoll);
+assert.ok(ragdollResident?.visual?.root, 'a nearby villager should have a streamed visual before a hit');
+let hasHeadZone = false;
+ragdollResident.visual.root.traverse((child) => {
+  if (child.isMesh && child.userData.gameMeta?.key === 'head') hasHeadZone = true;
+});
+assert.ok(hasHeadZone, 'resident head geometry must carry its own hit-zone metadata');
+ragdollResident.x = 180;
+ragdollResident.z = 100;
+ragdollResident.yaw = 0;
+ragdollResident.health = 100;
+ragdollResident.dead = false;
+ragdollResident.limbInjured = false;
+ragdollResident.visual.root.position.set(180, village.terrainHeightAt(180), 100);
+ragdollResident.visual.root.rotation.y = 0;
+const testBloodWall = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 0.16), new THREE.MeshBasicMaterial());
+testBloodWall.position.set(180, village.terrainHeightAt(180) + 1, 103);
+testBloodWall.userData.bulletSurface = true;
+testBloodWall.updateMatrixWorld(true);
+sandbox.__scene.add(testBloodWall);
+sandbox.__bulletSurfaceTargets.push(testBloodWall);
+const limbImpact = new THREE.Vector3(180, village.terrainHeightAt(180) + 0.36, 100);
+sandbox.__applyWeaponHit(
+  { kind: 'resident', human: ragdollResident, key: 'leg-left' },
+  new THREE.Vector3(0, 0, 1),
+  arsenal.WEAPON_BY_ID.get('glock-17'),
+  1,
+  limbImpact
+);
+assert.ok(ragdollResident.ragdoll, 'a hit resident should receive a physical ragdoll rig');
+assert.equal(ragdollResident.ragdoll.parts.length, 15, 'resident ragdoll should have 15 body parts');
+assert.equal(ragdollResident.ragdoll.constraints.length, 14, 'resident ragdoll should constrain every joint');
+assert.equal(ragdollResident.ragdoll.state, 'falling');
+assert.equal(ragdollResident.ragdoll.partMap.torso.body.type, CANNON.Body.DYNAMIC);
+assert.equal(ragdollResident.visual.root.visible, false, 'the animated standing model must yield to the physics ragdoll');
+assert.ok(sandbox.__bloodDecals.some((decal) => decal.object.position.z > 102), 'NPC impacts should leave a red splatter on a nearby wall');
+assert.ok(sandbox.__bloodDecals.some((decal) => Math.abs(decal.object.position.x - 180) < 1), 'NPC impacts should leave a red decal on the snow');
+assert.ok(sandbox.__bloodParticles.length > 0, 'NPC impacts should emit visible red particles');
+for (let step = 0; step < 360 && ragdollResident.ragdoll.state !== 'crawling'; step++) {
+  sandbox.__updateResidentRagdoll(ragdollResident, 1 / 60, false);
+  sandbox.__world.step(1 / 60, 1 / 60, 4);
+}
+assert.equal(ragdollResident.ragdoll.state, 'crawling', 'a surviving limb wound should transition from physical fall into crawling');
+const crawlStart = { x: ragdollResident.x, z: ragdollResident.z };
+for (let step = 0; step < 90; step++) {
+  sandbox.__updateResidentRagdoll(ragdollResident, 1 / 60, false);
+  sandbox.__world.step(1 / 60, 1 / 60, 4);
+}
+assert.ok(Math.hypot(ragdollResident.x - crawlStart.x, ragdollResident.z - crawlStart.z) > 0.2, 'the injured villager should crawl away after falling');
+sandbox.__bulletSurfaceTargets.splice(sandbox.__bulletSurfaceTargets.indexOf(testBloodWall), 1);
+sandbox.__scene.remove(testBloodWall);
+sandbox.__cleanupResidentRagdoll(ragdollResident, true);
+
+const headResident = sandbox.__activeResidents().find((resident) => resident !== ragdollResident && !resident.dead && !resident.ragdoll);
+assert.ok(headResident?.visual?.root, 'a second nearby villager should be available for a head-shot test');
+headResident.health = 100;
+sandbox.__applyWeaponHit(
+  { kind: 'resident', human: headResident, key: 'head' },
+  new THREE.Vector3(0, 0, 1),
+  arsenal.WEAPON_BY_ID.get('glock-17'),
+  1,
+  new THREE.Vector3(headResident.x, village.terrainHeightAt(headResident.x) + 1.75, headResident.z)
+);
+assert.equal(headResident.dead, true, 'a head hit should kill an NPC quickly');
+assert.equal(headResident.ragdoll.state, 'dead', 'a lethal hit should leave the NPC in physical ragdoll');
+sandbox.__cleanupResidentRagdoll(headResident, false);
+
+const cameraYBeforeDeath = sandbox.__camera.position.y;
+const cameraOrientationBeforeDeath = sandbox.__camera.quaternion.clone();
+sandbox.__triggerDeath('smoke test');
+assert.equal(sandbox.__isDead(), true);
+assert.equal(sandbox.__player.fixedRotation, false, 'death must release the player capsule rotation lock');
+assert.ok(sandbox.__player.angularVelocity.length() > 1, 'death should impart physical tumbling angular velocity');
+for (let step = 0; step < 100; step++) {
+  sandbox.__world.step(1 / 60, 1 / 60, 4);
+  sandbox.__updateCamera(1 / 60);
+}
+assert.ok(sandbox.__camera.position.y < cameraYBeforeDeath - 0.2, 'the camera should descend with the physical body instead of a scripted timer');
+assert.ok(sandbox.__camera.quaternion.angleTo(cameraOrientationBeforeDeath) > 0.35, 'the death camera should roll with the tumbling capsule');
+
+console.log(`runtime OK: village (${sandbox.__scene.children.length} roots, ${sandbox.__world.bodies.length} bodies), streamed residents and flee, physical NPC fall/crawl, zonal damage, blood effects, tumbling death camera, no first-person hands, test backpack, pickup and throw`);

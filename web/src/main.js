@@ -48,7 +48,7 @@ scene.add(camera);
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0), allowSleep: true });
 world.broadphase = new CANNON.SAPBroadphase(world);
 world.solver = new CANNON.GSSolver();
-world.solver.iterations = 12;
+world.solver.iterations = 14;
 world.solver.tolerance = 0.001;
 world.defaultContactMaterial.friction = 0.62;
 world.defaultContactMaterial.restitution = 0.08;
@@ -75,6 +75,8 @@ const physicsRecords = [];
 const raycastTargets = [];
 const bulletSurfaceTargets = [];
 const bulletMarks = [];
+const bloodDecals = [];
+const bloodParticles = [];
 const mannequins = [];
 const snowDrifts = [];
 let floorSurfaceMesh = null;
@@ -592,6 +594,12 @@ function tagVisual(root, meta) {
   });
   root.userData.gameMeta = meta;
   raycastTargets.push(root);
+}
+
+function removeRaycastTarget(target) {
+  for (let index = raycastTargets.length - 1; index >= 0; index--) {
+    if (raycastTargets[index] === target) raycastTargets.splice(index, 1);
+  }
 }
 
 function updateSnowDriftCollider(drift, scale) {
@@ -1612,14 +1620,14 @@ function addRagdollPart(human, key, size, mass, position, material = human.skin,
     position: new CANNON.Vec3(position[0], position[1], position[2]),
     collisionFilterGroup: COLLISION_GROUP_RAGDOLL,
     collisionFilterMask: COLLISION_MASK_ALL,
-    angularDamping: 0.2,
-    linearDamping: 0.08,
+    angularDamping: 0.42,
+    linearDamping: 0.12,
     allowSleep: true,
-    sleepSpeedLimit: 0.08,
-    sleepTimeLimit: 0.65
+    sleepSpeedLimit: 0.1,
+    sleepTimeLimit: 0.55
   });
   body.addShape(new CANNON.Box(new CANNON.Vec3(size[0] / 2, size[1] / 2, size[2] / 2)));
-  body.gameMeta = { kind: 'mannequin', human, key, body };
+  body.gameMeta = { kind: human.metaKind || 'mannequin', human, key, body };
   world.addBody(body);
 
   const group = new THREE.Group();
@@ -1659,7 +1667,7 @@ function addRagdollPart(human, key, size, mass, position, material = human.skin,
   return part;
 }
 
-function addLimitedJoint(human, aName, bName, pivotA, pivotB, angle, twist = 0.35, axis = [0, 1, 0]) {
+function addLimitedJoint(human, aName, bName, pivotA, pivotB, angle, twist = 0.35, axis = [0, 1, 0], maxForce = 2600) {
   const a = human.partMap[aName].body;
   const b = human.partMap[bName].body;
   const constraint = new CANNON.ConeTwistConstraint(a, b, {
@@ -1669,7 +1677,7 @@ function addLimitedJoint(human, aName, bName, pivotA, pivotB, angle, twist = 0.3
     axisB: new CANNON.Vec3(...axis),
     angle,
     twistAngle: twist,
-    maxForce: 2e5,
+    maxForce,
     collideConnected: false
   });
   world.addConstraint(constraint);
@@ -1845,6 +1853,42 @@ const MANNEQUIN_KNEELING_POSE = {
   footR: [0.13, 0.065, -0.30, 0, 0, 0]
 };
 
+const MANNEQUIN_CRAWLING_POSE = {
+  pelvis: [0, 0.26, 0, 0, 0, 0],
+  torso: [0, 0.42, 0.08, Math.PI / 2, 0, 0],
+  head: [0, 0.43, 0.49, Math.PI / 2, 0, 0],
+  upperArmL: [-0.29, 0.32, 0.16, Math.PI / 2, 0, -0.06],
+  lowerArmL: [-0.30, 0.18, 0.35, Math.PI / 2, 0, 0],
+  handL: [-0.30, 0.10, 0.49, Math.PI / 2, 0, 0],
+  upperArmR: [0.29, 0.32, 0.16, Math.PI / 2, 0, 0.06],
+  lowerArmR: [0.30, 0.18, 0.35, Math.PI / 2, 0, 0],
+  handR: [0.30, 0.10, 0.49, Math.PI / 2, 0, 0],
+  thighL: [-0.125, 0.22, -0.17, -Math.PI / 2, 0, 0],
+  shinL: [-0.13, 0.14, -0.48, -Math.PI / 2, 0, 0],
+  footL: [-0.13, 0.065, -0.73, 0, 0, 0],
+  thighR: [0.125, 0.22, -0.17, -Math.PI / 2, 0, 0],
+  shinR: [0.13, 0.14, -0.48, -Math.PI / 2, 0, 0],
+  footR: [0.13, 0.065, -0.73, 0, 0, 0]
+};
+
+function makeCrawlingMannequinPose(human) {
+  const phase = human.walkPhase;
+  const entries = Object.fromEntries(Object.entries(MANNEQUIN_CRAWLING_POSE).map(([key, value]) => [key, value.slice()]));
+  const leftDrive = Math.sin(phase) * 0.035;
+  const rightDrive = Math.sin(phase + Math.PI) * 0.035;
+  entries.upperArmL[2] += leftDrive;
+  entries.lowerArmL[2] += leftDrive * 0.65;
+  entries.handL[2] += leftDrive * 0.35;
+  entries.upperArmR[2] += rightDrive;
+  entries.lowerArmR[2] += rightDrive * 0.65;
+  entries.handR[2] += rightDrive * 0.35;
+  entries.thighL[2] -= rightDrive * 0.8;
+  entries.shinL[2] -= rightDrive * 0.4;
+  entries.thighR[2] -= leftDrive * 0.8;
+  entries.shinR[2] -= leftDrive * 0.4;
+  return makeMannequinWorldPose(human, entries);
+}
+
 function mannequinLocalEntries(human, style = 'idle') {
   const entries = {};
   const phase = human.walkPhase;
@@ -2017,6 +2061,28 @@ function beginMannequinRecovery(human) {
   setMannequinBodyType(human, CANNON.Body.KINEMATIC);
 }
 
+function beginMannequinCrawl(human) {
+  const pelvis = human.partMap.pelvis.body.position;
+  human.rootX = THREE.MathUtils.clamp(pelvis.x, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+  human.rootZ = THREE.MathUtils.clamp(pelvis.z, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
+  let awayX = human.rootX - playerBody.position.x;
+  let awayZ = human.rootZ - playerBody.position.z;
+  const length = Math.hypot(awayX, awayZ);
+  if (length > 0.1) { awayX /= length; awayZ /= length; }
+  else { awayX = 0; awayZ = 1; }
+  human.yaw = Math.atan2(awayX, awayZ);
+  human.crawlTarget = {
+    x: THREE.MathUtils.clamp(human.rootX + awayX * 5, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2),
+    z: THREE.MathUtils.clamp(human.rootZ + awayZ * 5, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2)
+  };
+  human.crawlFrom = captureMannequinPose(human);
+  human.state = 'crawling';
+  human.stateTime = 0;
+  human.walkPhase = 0;
+  human.crawlBlend = 0;
+  setMannequinBodyType(human, CANNON.Body.KINEMATIC);
+}
+
 function finishMannequinRecovery(human) {
   human.stateTime = 0;
   human.walkPhase = 0;
@@ -2109,7 +2175,31 @@ function updateMannequinAI(dt) {
     if (human.state === 'falling') {
       human.stateTime += dt;
       human.quietTime = mannequinFallIsSettled(human) ? human.quietTime + dt : 0;
-      if (human.stateTime >= 1.15 && (human.quietTime >= 0.58 || human.stateTime >= 3.85)) beginMannequinRecovery(human);
+      if (human.stateTime >= 1.15 && (human.quietTime >= 0.58 || human.stateTime >= 3.85)) {
+        if (human.crawlAfterFall) beginMannequinCrawl(human);
+        else beginMannequinRecovery(human);
+      }
+      continue;
+    }
+    if (human.state === 'crawling') {
+      human.stateTime += dt;
+      human.walkPhase += dt * 4.1;
+      const crawlPose = makeCrawlingMannequinPose(human);
+      if (human.crawlBlend < 1) {
+        human.crawlBlend = Math.min(1, human.crawlBlend + dt / 0.46);
+        blendMannequinPose(human, human.crawlFrom, crawlPose, human.crawlBlend, dt);
+        continue;
+      }
+      const dx = human.crawlTarget.x - human.rootX;
+      const dz = human.crawlTarget.z - human.rootZ;
+      const distance = Math.hypot(dx, dz);
+      if (distance > 0.04) {
+        human.yaw = Math.atan2(dx, dz);
+        const travel = Math.min(distance, 0.62 * dt);
+        human.rootX = THREE.MathUtils.clamp(human.rootX + dx / distance * travel, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+        human.rootZ = THREE.MathUtils.clamp(human.rootZ + dz / distance * travel, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
+      }
+      setMannequinPose(human, makeCrawlingMannequinPose(human), dt);
       continue;
     }
     if (human.state === 'recovering-to-knees') {
@@ -2166,7 +2256,7 @@ function updateMannequinAI(dt) {
       setMannequinPose(human, makeStandingMannequinPose(human, 'attack'), dt);
       if (!human.attackHitDone && human.stateTime >= 0.27) {
         human.attackHitDone = true;
-        if (distance <= 1.55) receiveDamage(8, 'torso');
+        if (distance <= 1.55) receiveDamage(8, 'torso', new THREE.Vector3(dx, 0, dz).normalize());
       }
       if (human.stateTime >= 0.74) {
         human.state = 'chasing';
@@ -2275,72 +2365,168 @@ function planResidentRoute(resident, targetIndex) {
 
 for (const resident of residentPopulation) planResidentRoute(resident, resident.targetIndex);
 
-function addResidentMesh(parent, geometry, material, position) {
+function addResidentMesh(parent, geometry, material, position, gameMeta = null) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(position[0], position[1], position[2]);
   mesh.castShadow = false;
   mesh.receiveShadow = false;
+  if (gameMeta) mesh.userData.gameMeta = gameMeta;
   parent.add(mesh);
   return mesh;
 }
 
 function buildResidentModel(resident) {
   const palette = residentClothingPalettes[resident.styleIndex % residentClothingPalettes.length];
+  const partMeta = (key) => ({ kind: 'resident', human: resident, key });
   const root = new THREE.Group();
   root.name = `village-${resident.id}`;
   root.userData.residentId = resident.id;
   const body = new THREE.Group();
   root.add(body);
-  addResidentMesh(body, residentGeometry.pelvis, palette.trousers, [0, 0.76, 0]);
-  addResidentMesh(body, residentGeometry.torso, palette.coat, [0, 1.12, 0]);
-  addResidentMesh(body, residentGeometry.collar, palette.coat, [0, 1.43, 0]);
-  addResidentMesh(body, residentGeometry.neck, residentSkinMaterial, [0, 1.48, 0]);
+  addResidentMesh(body, residentGeometry.pelvis, palette.trousers, [0, 0.76, 0], partMeta('torso'));
+  addResidentMesh(body, residentGeometry.torso, palette.coat, [0, 1.12, 0], partMeta('torso'));
+  addResidentMesh(body, residentGeometry.collar, palette.coat, [0, 1.43, 0], partMeta('torso'));
+  addResidentMesh(body, residentGeometry.neck, residentSkinMaterial, [0, 1.48, 0], partMeta('head'));
   const head = new THREE.Group();
   head.position.set(0, 1.54, 0);
   body.add(head);
-  addResidentMesh(head, residentGeometry.head, residentSkinMaterial, [0, 0.2, 0]);
-  addResidentMesh(head, residentGeometry.hair, residentHairMaterials[resident.styleIndex % residentHairMaterials.length], [0, 0.4, -0.005]);
+  addResidentMesh(head, residentGeometry.head, residentSkinMaterial, [0, 0.2, 0], partMeta('head'));
+  addResidentMesh(head, residentGeometry.hair, residentHairMaterials[resident.styleIndex % residentHairMaterials.length], [0, 0.4, -0.005], partMeta('head'));
 
   const arms = [];
   for (const side of [-1, 1]) {
+    const suffix = side < 0 ? 'left' : 'right';
     const arm = new THREE.Group();
     arm.position.set(side * 0.29, 1.39, 0);
     body.add(arm);
-    addResidentMesh(arm, residentGeometry.upperArm, palette.coat, [0, -0.18, 0]);
+    addResidentMesh(arm, residentGeometry.upperArm, palette.coat, [0, -0.18, 0], partMeta(`arm-${suffix}`));
     const forearm = new THREE.Group();
     forearm.position.y = -0.35;
     arm.add(forearm);
-    addResidentMesh(forearm, residentGeometry.lowerArm, palette.coat, [0, -0.17, 0]);
-    addResidentMesh(forearm, residentGeometry.hand, residentGloveMaterial, [0, -0.39, 0]);
+    addResidentMesh(forearm, residentGeometry.lowerArm, palette.coat, [0, -0.17, 0], partMeta(`arm-${suffix}`));
+    addResidentMesh(forearm, residentGeometry.hand, residentGloveMaterial, [0, -0.39, 0], partMeta(`arm-${suffix}`));
     arms.push(arm);
   }
 
   const legs = [];
   for (const side of [-1, 1]) {
+    const suffix = side < 0 ? 'left' : 'right';
     const leg = new THREE.Group();
     leg.position.set(side * 0.115, 0.82, 0);
     body.add(leg);
-    addResidentMesh(leg, residentGeometry.thigh, palette.trousers, [0, -0.21, 0]);
+    addResidentMesh(leg, residentGeometry.thigh, palette.trousers, [0, -0.21, 0], partMeta(`leg-${suffix}`));
     const shin = new THREE.Group();
     shin.position.y = -0.41;
     leg.add(shin);
-    addResidentMesh(shin, residentGeometry.shin, palette.trousers, [0, -0.18, 0]);
-    addResidentMesh(shin, residentGeometry.boot, residentBootMaterial, [0, -0.39, 0.06]);
+    addResidentMesh(shin, residentGeometry.shin, palette.trousers, [0, -0.18, 0], partMeta(`leg-${suffix}`));
+    addResidentMesh(shin, residentGeometry.boot, residentBootMaterial, [0, -0.39, 0.06], partMeta(`leg-${suffix}`));
     legs.push(leg);
   }
   root.position.set(resident.x, terrainHeightAt(resident.x), resident.z);
   root.rotation.y = resident.yaw;
   scene.add(root);
-  return { root, head, arms, legs };
+  raycastTargets.push(root);
+  return { root, body, head, arms, legs };
+}
+
+function createResidentRagdoll(resident) {
+  const palette = residentClothingPalettes[resident.styleIndex % residentClothingPalettes.length];
+  const human = {
+    id: resident.id, resident, metaKind: 'resident', origin: [resident.x, 0, resident.z],
+    colorIndex: resident.styleIndex % dummyAccentMaterials.length, skin: residentSkinMaterial,
+    parts: [], partMap: {}, constraints: [], active: true, dead: false, health: resident.health ?? 100,
+    state: 'falling', stateTime: 0, quietTime: 0, hitFlash: 0, rootX: resident.x, rootZ: resident.z,
+    yaw: resident.yaw, walkPhase: resident.walkPhase, crawlAfterFall: false
+  };
+  const terrainY = terrainHeightAt(resident.x);
+  const cosine = Math.cos(resident.yaw);
+  const sine = Math.sin(resident.yaw);
+  const localPosition = (x, y, z) => [
+    resident.x + x * cosine + z * sine,
+    terrainY + y,
+    resident.z - x * sine + z * cosine
+  ];
+  const yawQuaternion = new CANNON.Quaternion();
+  yawQuaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), resident.yaw);
+  const addPart = (key, size, mass, x, y, z, material, geometry) => {
+    const part = addRagdollPart(human, key, size, mass, localPosition(x, y, z), material, geometry);
+    part.body.quaternion.copy(yawQuaternion);
+    part.body.previousQuaternion.copy(yawQuaternion);
+    part.body.interpolatedQuaternion.copy(yawQuaternion);
+    part.visual.quaternion.copy(yawQuaternion);
+    part.body.aabbNeedsUpdate = true;
+    part.restLocal = { x, y, z };
+    part.restQuaternion = new CANNON.Quaternion();
+    return part;
+  };
+  addPart('pelvis', [0.44, 0.26, 0.32], 4.0, 0, 0.76, 0, palette.trousers, residentGeometry.pelvis);
+  addPart('torso', [0.54, 0.68, 0.36], 8.8, 0, 1.12, 0, palette.coat, residentGeometry.torso);
+  addPart('head', [0.4, 0.42, 0.38], 3.0, 0, 1.74, 0, residentSkinMaterial, residentGeometry.head);
+  for (const side of [-1, 1]) {
+    const suffix = side < 0 ? 'L' : 'R';
+    addPart(`upperArm${suffix}`, [0.2, 0.4, 0.2], 2.0, side * 0.29, 1.21, 0, palette.coat, residentGeometry.upperArm);
+    addPart(`lowerArm${suffix}`, [0.18, 0.37, 0.18], 1.3, side * 0.29, 0.87, 0, palette.coat, residentGeometry.lowerArm);
+    addPart(`hand${suffix}`, [0.16, 0.14, 0.16], 0.5, side * 0.29, 0.65, 0.02, residentGloveMaterial, residentGeometry.hand);
+    addPart(`thigh${suffix}`, [0.23, 0.44, 0.24], 3.8, side * 0.115, 0.61, 0, palette.trousers, residentGeometry.thigh);
+    addPart(`shin${suffix}`, [0.19, 0.4, 0.2], 2.1, side * 0.13, 0.23, 0.01, palette.trousers, residentGeometry.shin);
+    addPart(`foot${suffix}`, [0.24, 0.14, 0.32], 0.85, side * 0.13, 0.06, 0.075, residentBootMaterial, residentGeometry.boot);
+  }
+  addLimitedJoint(human, 'pelvis', 'torso', [0, 0.13, 0], [0, -0.34, 0], 0.32, 0.28);
+  addLimitedJoint(human, 'torso', 'head', [0, 0.34, 0], [0, -0.21, 0], 0.42, 0.32);
+  for (const side of [-1, 1]) {
+    const suffix = side < 0 ? 'L' : 'R';
+    addLimitedJoint(human, 'torso', `upperArm${suffix}`, [side * 0.27, 0.25, 0], [-side * 0.1, 0.2, 0], 1.2, 0.76, [1, 0, 0]);
+    addLimitedJoint(human, `upperArm${suffix}`, `lowerArm${suffix}`, [0, -0.2, 0], [0, 0.185, 0], 0.15, 2.05, [1, 0, 0]);
+    addLimitedJoint(human, `lowerArm${suffix}`, `hand${suffix}`, [0, -0.185, 0], [0, 0.07, 0], 0.38, 0.44, [1, 0, 0]);
+    addLimitedJoint(human, 'pelvis', `thigh${suffix}`, [side * 0.115, -0.04, 0], [0, 0.22, 0], 0.98, 0.5, [1, 0, 0]);
+    addLimitedJoint(human, `thigh${suffix}`, `shin${suffix}`, [0, -0.22, 0], [0, 0.2, -0.005], 0.13, 1.98, [1, 0, 0]);
+    addLimitedJoint(human, `shin${suffix}`, `foot${suffix}`, [0, -0.2, 0], [0, 0.04, -0.075], 0.3, 0.38, [1, 0, 0]);
+  }
+  resident.health ??= 100;
+  resident.injuries ??= {};
+  resident.ragdoll = human;
+  if (resident.visual?.root) {
+    removeRaycastTarget(resident.visual.root);
+    resident.visual.root.visible = false;
+  }
+  setMannequinBodyType(human, CANNON.Body.DYNAMIC);
+  return human;
+}
+
+function cleanupResidentRagdoll(resident, restoreVisual = true) {
+  const human = resident.ragdoll;
+  if (!human) return;
+  for (const constraint of human.constraints) world.removeConstraint(constraint);
+  for (const part of human.parts) {
+    world.removeBody(part.body);
+    scene.remove(part.visual);
+    removeRaycastTarget(part.visual);
+    const index = physicsRecords.findIndex((record) => record.body === part.body);
+    if (index >= 0) physicsRecords.splice(index, 1);
+  }
+  human.constraints.length = 0;
+  human.parts.length = 0;
+  human.partMap = {};
+  resident.ragdoll = null;
+  if (restoreVisual && !resident.dead && resident.visual?.root) {
+    resident.visual.root.position.set(resident.x, terrainHeightAt(resident.x), resident.z);
+    resident.visual.root.rotation.y = resident.yaw;
+    resident.visual.root.visible = true;
+    if (!resident.visual.root.parent) scene.add(resident.visual.root);
+    raycastTargets.push(resident.visual.root);
+  }
+  world.broadphase.dirty = true;
 }
 
 function selectResidentModels() {
   const playerX = playerBody.position.x;
   const playerZ = playerBody.position.z;
-  const desired = selectActiveResidents(residentPopulation, playerX, playerZ, MAX_ACTIVE_RESIDENTS, RESIDENT_VISIBILITY_RADIUS);
+  const desired = selectActiveResidents(residentPopulation, playerX, playerZ, MAX_ACTIVE_RESIDENTS, RESIDENT_VISIBILITY_RADIUS)
+    .filter((resident) => !resident.dead);
   const candidates = new Set(desired);
   const retentionSquared = RESIDENT_RETENTION_RADIUS * RESIDENT_RETENTION_RADIUS;
   for (const resident of activeVillageResidents) {
+    if (resident.dead) continue;
     const dx = resident.x - playerX;
     const dz = resident.z - playerZ;
     if (dx * dx + dz * dz <= retentionSquared) candidates.add(resident);
@@ -2355,7 +2541,11 @@ function selectResidentModels() {
   const nextSet = new Set(nextActive);
   for (const resident of activeVillageResidents) {
     if (nextSet.has(resident)) continue;
-    if (resident.visual?.root) scene.remove(resident.visual.root);
+    if (resident.ragdoll) cleanupResidentRagdoll(resident, false);
+    if (resident.visual?.root) {
+      removeRaycastTarget(resident.visual.root);
+      scene.remove(resident.visual.root);
+    }
     resident.visual = null;
     resident.active = false;
   }
@@ -2418,6 +2608,7 @@ function planResidentEscape(resident) {
 }
 
 function advanceResident(resident, dt, playerThreat = false) {
+  if (resident.dead || resident.ragdoll) return;
   if (playerThreat) {
     const distance = Math.hypot(resident.x - playerBody.position.x, resident.z - playerBody.position.z);
     if (distance < 28 && (!resident.fleeing || resident.fleeTimer < 0.75)) planResidentEscape(resident);
@@ -2488,6 +2679,139 @@ function updateResidentVisual(resident, dt) {
   }
 }
 
+function getResidentRagdollPart(human, key) {
+  if (human.partMap[key]) return human.partMap[key];
+  const limbMatch = /^(arm|leg)-(left|right)$/.exec(key);
+  if (!limbMatch) return human.partMap.torso;
+  const suffix = limbMatch[2] === 'left' ? 'L' : 'R';
+  return human.partMap[limbMatch[1] === 'arm' ? `lowerArm${suffix}` : `shin${suffix}`] || human.partMap.torso;
+}
+
+function beginResidentCrawl(resident) {
+  const human = resident.ragdoll;
+  const pelvis = human.partMap.pelvis.body.position;
+  human.rootX = THREE.MathUtils.clamp(pelvis.x, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+  human.rootZ = THREE.MathUtils.clamp(pelvis.z, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
+  resident.x = human.rootX;
+  resident.z = human.rootZ;
+  let awayX = resident.x - playerBody.position.x;
+  let awayZ = resident.z - playerBody.position.z;
+  const length = Math.hypot(awayX, awayZ);
+  if (length > 0.1) { awayX /= length; awayZ /= length; }
+  else { awayX = Math.sin(resident.index * 2.399963229728653); awayZ = Math.cos(resident.index * 2.399963229728653); }
+  human.yaw = Math.atan2(awayX, awayZ);
+  human.crawlTarget = {
+    x: THREE.MathUtils.clamp(human.rootX + awayX * 6, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2),
+    z: THREE.MathUtils.clamp(human.rootZ + awayZ * 6, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2)
+  };
+  human.crawlFrom = captureMannequinPose(human);
+  human.state = 'crawling';
+  human.stateTime = 0;
+  human.walkPhase = 0;
+  human.crawlBlend = 0;
+  resident.state = 'crawling';
+  setMannequinBodyType(human, CANNON.Body.KINEMATIC);
+}
+
+function beginResidentRecovery(resident) {
+  const human = resident.ragdoll;
+  const pelvis = human.partMap.pelvis.body.position;
+  human.rootX = THREE.MathUtils.clamp(pelvis.x, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+  human.rootZ = THREE.MathUtils.clamp(pelvis.z, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
+  resident.x = human.rootX;
+  resident.z = human.rootZ;
+  human.yaw = resident.yaw;
+  human.recoveryFrom = captureMannequinPose(human);
+  human.kneelingPose = makeKneelingMannequinPose(human);
+  human.standingPose = makeStandingMannequinPose(human, 'idle');
+  human.state = 'recovering-to-knees';
+  human.stateTime = 0;
+  resident.state = 'recovering';
+  setMannequinBodyType(human, CANNON.Body.KINEMATIC);
+}
+
+function finishResidentRecovery(resident) {
+  const human = resident.ragdoll;
+  resident.x = human.rootX;
+  resident.z = human.rootZ;
+  resident.yaw = human.yaw;
+  resident.state = 'idle';
+  human.state = 'standing';
+  human.stateTime = 0;
+  human.walkPhase = resident.walkPhase;
+}
+
+function updateResidentRagdoll(resident, dt, threat) {
+  const human = resident.ragdoll;
+  if (!human || human.state === 'dead') return;
+  if (human.state === 'falling') {
+    human.stateTime += dt;
+    human.quietTime = mannequinFallIsSettled(human) ? human.quietTime + dt : 0;
+    if (human.stateTime >= 0.82 && (human.quietTime >= 0.32 || human.stateTime >= 3.4)) {
+      if (human.crawlAfterFall) beginResidentCrawl(resident);
+      else beginResidentRecovery(resident);
+    }
+    return;
+  }
+  if (human.state === 'recovering-to-knees') {
+    human.stateTime += dt;
+    blendMannequinPose(human, human.recoveryFrom, human.kneelingPose, human.stateTime / 1.0, dt);
+    if (human.stateTime >= 1.0) {
+      human.state = 'kneeling-hold';
+      human.stateTime = 0;
+    }
+    return;
+  }
+  if (human.state === 'kneeling-hold') {
+    human.stateTime += dt;
+    setMannequinPose(human, human.kneelingPose, dt);
+    if (human.stateTime >= 0.35) {
+      human.state = 'recovering-to-feet';
+      human.stateTime = 0;
+    }
+    return;
+  }
+  if (human.state === 'recovering-to-feet') {
+    human.stateTime += dt;
+    blendMannequinPose(human, human.kneelingPose, human.standingPose, human.stateTime / 0.95, dt);
+    if (human.stateTime >= 0.95) finishResidentRecovery(resident);
+    return;
+  }
+  if (human.state === 'standing') {
+    advanceResident(resident, dt, threat);
+    human.rootX = resident.x;
+    human.rootZ = resident.z;
+    human.yaw = resident.yaw;
+    human.walkPhase = resident.walkPhase;
+    const moving = resident.state === 'walking' || resident.state === 'fleeing';
+    setMannequinPose(human, makeStandingMannequinPose(human, moving ? 'walk' : 'idle'), dt);
+    return;
+  }
+  if (human.state === 'crawling') {
+    human.stateTime += dt;
+    human.walkPhase += dt * 4.1;
+    const crawlPose = makeCrawlingMannequinPose(human);
+    if (human.crawlBlend < 1) {
+      human.crawlBlend = Math.min(1, human.crawlBlend + dt / 0.46);
+      blendMannequinPose(human, human.crawlFrom, crawlPose, human.crawlBlend, dt);
+      return;
+    }
+    const dx = human.crawlTarget.x - human.rootX;
+    const dz = human.crawlTarget.z - human.rootZ;
+    const distance = Math.hypot(dx, dz);
+    if (distance > 0.04) {
+      human.yaw = Math.atan2(dx, dz);
+      const travel = Math.min(distance, 0.62 * dt);
+      human.rootX = THREE.MathUtils.clamp(human.rootX + dx / distance * travel, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+      human.rootZ = THREE.MathUtils.clamp(human.rootZ + dz / distance * travel, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
+      resident.x = human.rootX;
+      resident.z = human.rootZ;
+      resident.yaw = human.yaw;
+    }
+    setMannequinPose(human, makeCrawlingMannequinPose(human), dt);
+  }
+}
+
 function updateVillageResidents(dt) {
   residentSimulationTimer += dt;
   if (residentSimulationTimer >= 0.5) {
@@ -2504,8 +2828,11 @@ function updateVillageResidents(dt) {
   }
   const threat = playerIsArmedAndRunning();
   for (const resident of activeVillageResidents) {
-    advanceResident(resident, dt, threat);
-    updateResidentVisual(resident, dt);
+    if (resident.ragdoll) updateResidentRagdoll(resident, dt, threat);
+    else {
+      advanceResident(resident, dt, threat);
+      updateResidentVisual(resident, dt);
+    }
   }
 }
 
@@ -3151,18 +3478,186 @@ function updateBulletMarks(dt) {
       removeBulletMark(record);
     }
   }
+  updateBloodEffects(dt);
 }
 
-function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1) {
+const bloodSurfaceRaycaster = new THREE.Raycaster();
+const bloodDecalGeometry = new THREE.CircleGeometry(1, 9);
+const bloodParticleGeometry = new THREE.SphereGeometry(0.024, 6, 5);
+const bloodParticleMaterial = new THREE.MeshBasicMaterial({ color: 0xc51e2a, transparent: true, opacity: 0.92, depthWrite: false });
+
+function createBloodDecal(position, normal, scale = 1) {
+  const group = new THREE.Group();
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x9b1621, transparent: true, opacity: 0.84, depthWrite: false,
+    side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4
+  });
+  const count = 4 + Math.floor(Math.random() * 3);
+  for (let index = 0; index < count; index++) {
+    const blob = new THREE.Mesh(bloodDecalGeometry, material);
+    const angle = Math.random() * Math.PI * 2;
+    const distance = index === 0 ? 0 : Math.random() * 0.11 * scale;
+    const radius = (index === 0 ? 0.12 : 0.045 + Math.random() * 0.075) * scale;
+    blob.position.set(Math.cos(angle) * distance, Math.sin(angle) * distance, 0.002 + index * 0.0005);
+    blob.scale.set(radius * (0.78 + Math.random() * 0.5), radius * (0.62 + Math.random() * 0.5), 1);
+    group.add(blob);
+  }
+  const safeNormal = normal.clone().normalize();
+  group.position.copy(position).addScaledVector(safeNormal, 0.012);
+  group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), safeNormal);
+  scene.add(group);
+  bloodDecals.push({ object: group, material, life: 24, maxLife: 24 });
+  if (bloodDecals.length > 36) {
+    const oldest = bloodDecals.shift();
+    scene.remove(oldest.object);
+    oldest.material.dispose();
+  }
+}
+
+function createBloodImpact(position, incomingDirection, scale = 1) {
+  if (!position) return;
+  const point = position.clone();
+  const direction = incomingDirection?.clone?.() || new THREE.Vector3(0, 0, -1);
+  if (direction.lengthSq() < 1e-5) direction.set(0, 0, -1);
+  direction.normalize();
+  const groundX = point.x + direction.x * 0.38;
+  const groundZ = point.z + direction.z * 0.38;
+  const groundNormal = new THREE.Vector3(-terrainSlopeAt(groundX), 1, 0).normalize();
+  createBloodDecal(
+    new THREE.Vector3(groundX, terrainHeightAt(groundX) + 0.006, groundZ),
+    groundNormal,
+    THREE.MathUtils.clamp(scale, 0.65, 1.6)
+  );
+
+  if (bulletSurfaceTargets.length && Math.abs(direction.y) < 0.92) {
+    bloodSurfaceRaycaster.set(point.clone().addScaledVector(direction, 0.08), direction);
+    bloodSurfaceRaycaster.far = 4.5;
+    const wallHit = bloodSurfaceRaycaster.intersectObjects(bulletSurfaceTargets, true)
+      .find((hit) => hit.distance > 0.08 && hit.distance < 4.5);
+    if (wallHit) {
+      const wallNormal = wallHit.face?.normal?.clone() || new THREE.Vector3(0, 0, 1);
+      wallHit.object.updateWorldMatrix(true, false);
+      wallNormal.transformDirection(wallHit.object.matrixWorld).normalize();
+      createBloodDecal(wallHit.point, wallNormal, scale * 0.78);
+    }
+  }
+
+  const count = Math.max(3, Math.round(5 * scale));
+  for (let index = 0; index < count; index++) {
+    const mesh = new THREE.Mesh(bloodParticleGeometry, bloodParticleMaterial);
+    mesh.position.copy(point).add(new THREE.Vector3((Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.08));
+    const speed = 1.4 + Math.random() * 2.2;
+    const velocity = direction.clone().multiplyScalar(speed).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 2.4,
+      0.35 + Math.random() * 2.0,
+      (Math.random() - 0.5) * 2.4
+    ));
+    scene.add(mesh);
+    bloodParticles.push({ mesh, velocity, life: 0.35 + Math.random() * 0.42, maxLife: 0.77 });
+  }
+  while (bloodParticles.length > 72) {
+    const oldest = bloodParticles.shift();
+    scene.remove(oldest.mesh);
+  }
+}
+
+function updateBloodEffects(dt) {
+  for (let index = bloodParticles.length - 1; index >= 0; index--) {
+    const particle = bloodParticles[index];
+    particle.life -= dt;
+    particle.velocity.y -= 6.4 * dt;
+    particle.mesh.position.addScaledVector(particle.velocity, dt);
+    particle.mesh.scale.setScalar(THREE.MathUtils.clamp(particle.life / particle.maxLife, 0, 1));
+    const groundY = terrainHeightAt(particle.mesh.position.x);
+    if (particle.life <= 0 || particle.mesh.position.y <= groundY + 0.018) {
+      scene.remove(particle.mesh);
+      bloodParticles.splice(index, 1);
+    }
+  }
+  for (let index = bloodDecals.length - 1; index >= 0; index--) {
+    const decal = bloodDecals[index];
+    decal.life -= dt;
+    decal.material.opacity = 0.84 * THREE.MathUtils.clamp(decal.life / decal.maxLife, 0, 1);
+    if (decal.life <= 0) {
+      bloodDecals.splice(index, 1);
+      scene.remove(decal.object);
+      decal.material.dispose();
+    }
+  }
+}
+
+function applyImpactImpulse(body, direction, weapon, damage, hitPoint = null) {
+  if (!body || body.type !== CANNON.Body.DYNAMIC) return;
+  const magnitude = isMeleeWeapon(weapon)
+    ? THREE.MathUtils.clamp(5.2 + damage * 0.19, 6, 19)
+    : THREE.MathUtils.clamp(2.8 + damage * 0.11, 3.5, 10.5);
+  const impulse = new CANNON.Vec3(direction.x * magnitude, direction.y * magnitude, direction.z * magnitude);
+  const relativePoint = hitPoint
+    ? new CANNON.Vec3(hitPoint.x - body.position.x, hitPoint.y - body.position.y, hitPoint.z - body.position.z)
+    : new CANNON.Vec3();
+  const offsetLength = relativePoint.length();
+  if (offsetLength > 0.38) relativePoint.scale(0.38 / offsetLength, relativePoint);
+  body.applyImpulse(impulse, relativePoint);
+  body.wakeUp();
+}
+
+function applyResidentWeaponHit(meta, direction, weapon, damageMultiplier, hitPoint) {
+  const resident = meta.human?.resident || meta.human;
+  if (!resident) return;
+  if (resident.dead && !resident.ragdoll) return;
+  resident.health = Number.isFinite(resident.health) ? resident.health : 100;
+  resident.injuries ??= {};
+  const result = damageMannequin(resident, weapon, meta.key, damageMultiplier);
+  resident.health = result.health;
+  resident.injuries[meta.key] = (resident.injuries[meta.key] || 0) + 1;
+  resident.hitFlash = 0.32;
+  if (result.zone === 'limb') resident.limbInjured = true;
+
+  const human = resident.ragdoll || createResidentRagdoll(resident);
+  human.health = resident.health;
+  human.hitFlash = 0.32;
+  human.crawlAfterFall = resident.limbInjured && !result.lethal;
+  const part = getResidentRagdollPart(human, meta.key);
+  if (human.state !== 'falling' && human.state !== 'dead') {
+    for (const ragdollPart of human.parts) {
+      ragdollPart.body.type = CANNON.Body.DYNAMIC;
+      ragdollPart.body.mass = ragdollPart.mass;
+      ragdollPart.body.updateMassProperties();
+      ragdollPart.body.wakeUp();
+    }
+    human.state = 'falling';
+    human.stateTime = 0;
+    human.quietTime = 0;
+  }
+  if (result.lethal) {
+    resident.dead = true;
+    resident.state = 'dead';
+    human.dead = true;
+    human.state = 'dead';
+    human.active = true;
+  }
+  applyImpactImpulse(part?.body, direction, weapon, result.damage, hitPoint);
+  const impactPosition = hitPoint || new THREE.Vector3(part.body.position.x, part.body.position.y, part.body.position.z);
+  createBloodImpact(impactPosition, new THREE.Vector3(direction.x, direction.y, direction.z), result.zone === 'head' ? 1.3 : 1);
+  if (!weapon.pellets) playWeaponSound(weapon, 'impact');
+  toast(`${resident.id} · ${weapon.name.toUpperCase()} −${result.damage} ОЗ · ${result.health} ОЗ`, 1.05);
+}
+
+function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1, hitPoint = null) {
   if (!meta || meta.isStored || meta.isHeld) return;
+  if (meta.kind === 'resident' && meta.human) {
+    applyResidentWeaponHit(meta, direction, weapon, damageMultiplier, hitPoint);
+    return;
+  }
   if (meta.kind === 'mannequin' && meta.human) {
     const human = meta.human;
+    if (human.dead) return;
     const part = human.partMap[meta.key] || human.partMap.torso;
     const result = damageMannequin(human, weapon, meta.key, damageMultiplier);
     human.hitFlash = 0.32;
-    const impactDirection = new CANNON.Vec3(direction.x, direction.y, direction.z);
+    if (result.zone === 'limb' && !result.lethal) human.crawlAfterFall = true;
     if (!human.active) {
-      activateMannequin(human, part, Math.max(6, result.damage * 0.18), impactDirection, false);
+      activateMannequin(human, null, 0, null, false);
     } else if (human.state !== 'falling' && !human.dead) {
       human.state = 'falling';
       human.stateTime = 0;
@@ -3175,10 +3670,12 @@ function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1) {
       }
       world.broadphase.dirty = true;
     }
-    if (part.body.type === CANNON.Body.DYNAMIC) {
-      const force = isMeleeWeapon(weapon) ? 5 + result.damage * 0.25 : 1.8 + result.damage * 0.12;
-      part.body.applyImpulse(new CANNON.Vec3(direction.x * force, direction.y * force, direction.z * force), new CANNON.Vec3());
-    }
+    applyImpactImpulse(part.body, direction, weapon, result.damage, hitPoint);
+    createBloodImpact(
+      hitPoint || new THREE.Vector3(part.body.position.x, part.body.position.y, part.body.position.z),
+      new THREE.Vector3(direction.x, direction.y, direction.z),
+      result.zone === 'head' ? 1.3 : 1
+    );
     if (result.lethal) {
       human.dead = true;
       human.active = true;
@@ -3205,7 +3702,7 @@ function traceShotRay(weapon, offsetX = 0, offsetY = 0, damageMultiplier = 1) {
   const hit = traceHitscan(weaponRaycaster, targets)[0];
   if (!hit) return null;
   const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-  if (meta) applyWeaponHit(meta, weaponRaycaster.ray.direction, weapon, damageMultiplier);
+  if (meta) applyWeaponHit(meta, weaponRaycaster.ray.direction, weapon, damageMultiplier, hit.point);
   else if (hit.object.userData.bulletSurface) createBulletMark(hit);
   return hit;
 }
@@ -3420,6 +3917,8 @@ const keys = new Set();
 const raycaster = new THREE.Raycaster();
 raycaster.far = 5;
 const lookVector = new THREE.Vector3();
+const deathCameraLocalQuaternion = new THREE.Quaternion();
+const deathCameraOffset = new THREE.Vector3(0, 0.77, 0);
 const heldWorldTarget = new THREE.Vector3();
 const heldWorldOffset = new THREE.Vector3();
 
@@ -3515,12 +4014,31 @@ function triggerDeath(reason = 'КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ') 
   keys.clear();
   resetJoystick();
   lookState = null;
-  playerBody.velocity.set(0, 0, 0);
+  playerBody.fixedRotation = false;
+  playerBody.updateMassProperties();
+  playerBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yaw);
+  playerBody.previousQuaternion.copy(playerBody.quaternion);
+  playerBody.interpolatedQuaternion.copy(playerBody.quaternion);
+  playerBody.aabbNeedsUpdate = true;
+  deathCameraLocalQuaternion.setFromEuler(new THREE.Euler(pitch, 0, 0, 'YXZ'));
+  const forward = new CANNON.Vec3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  const fallAxis = new CANNON.Vec3(forward.z, 0, -forward.x);
+  fallAxis.normalize();
+  playerBody.angularDamping = 0.2;
+  playerBody.linearDamping = 0.08;
+  playerBody.velocity.x *= 0.42;
+  playerBody.velocity.z *= 0.42;
+  playerBody.velocity.y = Math.min(playerBody.velocity.y, 0.1);
+  playerBody.angularVelocity.set(fallAxis.x * 2.5 + (Math.random() - 0.5) * 0.55, 0.75, fallAxis.z * 2.5 + (Math.random() - 0.5) * 0.55);
+  playerBody.force.set(0, 0, 0);
+  playerBody.torque.set(0, 0, 0);
+  playerBody.wakeUp();
+  world.broadphase.dirty = true;
   updateDropButton();
   if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
 }
 
-function receiveDamage(amount, part = 'torso') {
+function receiveDamage(amount, part = 'torso', impactDirection = null) {
   if (!started || dead) return;
   const severity = Math.max(1, Math.round(amount));
   const fatalNeckHit = part === 'neck' && severity >= 14;
@@ -3530,6 +4048,13 @@ function receiveDamage(amount, part = 'torso') {
   shakeAmount = Math.min(1.4, shakeAmount + 0.85);
   updateHealthHUD();
   applyBodyInjury(part, severity);
+  if (impactDirection) {
+    createBloodImpact(
+      new THREE.Vector3(playerBody.position.x, playerBody.position.y + (part === 'head' ? 0.7 : 0.32), playerBody.position.z),
+      impactDirection,
+      severity >= 18 ? 1.15 : 0.85
+    );
+  }
   document.body.classList.add('damage-flash');
   setTimeout(() => document.body.classList.remove('damage-flash'), 170);
   if (part === 'neck' && severity >= 14) {
@@ -3626,7 +4151,7 @@ function getTargetMeta() {
   const hits = raycaster.intersectObjects(raycastTargets, true);
   for (const hit of hits) {
     const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-    if (!meta || meta.isStored || meta.isEmpty || meta.isHeld || hit.distance > (meta.range || 4.5)) continue;
+    if (!meta || meta.kind === 'resident' || meta.isStored || meta.isEmpty || meta.isHeld || hit.distance > (meta.range || 4.5)) continue;
     return { meta, distance: hit.distance, point: hit.point, aimed: true };
   }
   return getNearbyPickupTarget();
@@ -4302,11 +4827,7 @@ function isMovementKeyDown() {
 }
 
 function updatePlayer(dt) {
-  if (dead) {
-    playerBody.velocity.x = 0;
-    playerBody.velocity.z = 0;
-    return;
-  }
+  if (dead) return;
   let strafe = inventoryOpen ? 0 : joystick.x;
   let forward = inventoryOpen ? 0 : -joystick.y;
   if (!inventoryOpen) {
@@ -4331,9 +4852,16 @@ function updateCamera(dt) {
   damageCooldown = Math.max(0, damageCooldown - dt);
   shakeAmount = Math.max(0, shakeAmount - dt * 2.6);
   if (dead) {
-    const fall = THREE.MathUtils.smoothstep(deathTimer, 0.05, 1.25);
-    camera.position.set(playerBody.position.x, playerBody.position.y + 0.77 - fall * 0.68, playerBody.position.z);
-    camera.rotation.set(pitch + fall * 0.08, yaw, -fall * 0.62, 'YXZ');
+    const bodyOrientation = new THREE.Quaternion(
+      playerBody.quaternion.x, playerBody.quaternion.y, playerBody.quaternion.z, playerBody.quaternion.w
+    );
+    const headOffset = deathCameraOffset.clone().applyQuaternion(bodyOrientation);
+    camera.position.set(
+      playerBody.position.x + headOffset.x,
+      playerBody.position.y + headOffset.y,
+      playerBody.position.z + headOffset.z
+    );
+    camera.quaternion.copy(bodyOrientation).multiply(deathCameraLocalQuaternion);
     weaponSwayX = 0;
     weaponSwayY = 0;
     return;

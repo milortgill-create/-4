@@ -158,4 +158,21 @@ for (const { id, behavior } of [
   }
 }
 
-console.log('damage behavior OK: crate-contact safe, high-fall damage only; mannequin behavior OK: physical fall, kneeling recovery, standing, peaceful retreat and aggressive pursuit/punch');
+sandbox.world = makeWorld();
+sandbox.mannequins = [];
+const wounded = makeHuman('D-03', 'aggressive');
+wounded.crawlAfterFall = true;
+sandbox.mannequins.push(wounded);
+for (let step = 0; step < 8 * 60 && wounded.state !== 'crawling'; step++) {
+  sandbox.updateAIForTest(1 / 60);
+  sandbox.world.step(1 / 60, 1 / 60, 4);
+}
+assert.equal(wounded.state, 'crawling', 'a surviving limb wound should progress from ragdoll fall into crawling');
+const crawlStart = { x: wounded.rootX, z: wounded.rootZ };
+for (let step = 0; step < 90; step++) {
+  sandbox.updateAIForTest(1 / 60);
+  sandbox.world.step(1 / 60, 1 / 60, 4);
+}
+assert.ok(Math.hypot(wounded.rootX - crawlStart.x, wounded.rootZ - crawlStart.z) > 0.2, 'a wounded mannequin should crawl away after the fall');
+
+console.log('damage behavior OK: crate-contact safe, high-fall damage only; mannequin behavior OK: physical fall, joint-limited recovery, peaceful retreat, aggressive pursuit and limb-wound crawling');

@@ -95,13 +95,24 @@ export function reloadAmmo(weapon, ammo) {
   return loaded;
 }
 
+export function classifyHitZone(partKey = 'torso') {
+  const part = String(partKey).toLowerCase();
+  if (part === 'head' || part === 'neck') return 'head';
+  if (part === 'torso' || part === 'pelvis' || part === 'chest') return 'torso';
+  if (/arm|hand|leg|thigh|shin|foot/.test(part)) return 'limb';
+  return 'torso';
+}
+
 export function damageMannequin(human, weapon, partKey = 'torso', multiplier = 1) {
-  if (!human || !weapon) return { damage: 0, health: human?.health ?? 0, lethal: false };
-  const partMultiplier = partKey === 'head' ? 1.65 : ['handL', 'handR', 'footL', 'footR'].includes(partKey) ? 0.7 : 1;
-  const damage = Math.max(1, Math.round(weapon.damage * partMultiplier * multiplier));
+  if (!human || !weapon) return { damage: 0, health: human?.health ?? 0, lethal: false, zone: classifyHitZone(partKey) };
+  const zone = classifyHitZone(partKey);
+  // Small-arms fire now rewards precise head shots, while two or so torso hits
+  // can quickly defeat a target. Limb hits hurt less but still cause knockdown.
+  const zoneMultiplier = zone === 'head' ? 4.7 : zone === 'torso' ? 2.75 : 0.62;
+  const damage = Math.max(1, Math.round(weapon.damage * zoneMultiplier * multiplier));
   human.health = Math.max(0, (Number.isFinite(human.health) ? human.health : 100) - damage);
   if (human.health === 0) human.dead = true;
-  return { damage, health: human.health, lethal: human.dead === true };
+  return { damage, health: human.health, lethal: human.dead === true, zone };
 }
 
 export function traceHitscan(raycaster, targets) {

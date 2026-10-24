@@ -11,7 +11,7 @@ function makeWorld() {
   const world = new C.World({ gravity: new C.Vec3(0, -9.82, 0), allowSleep: true });
   world.broadphase = new C.SAPBroadphase(world);
   world.solver = new C.GSSolver();
-  world.solver.iterations = 12;
+  world.solver.iterations = 14;
   world.solver.tolerance = 0.001;
   world.addContactMaterial(new C.ContactMaterial(concrete, props, { friction: 0.75, restitution: 0.06 }));
   world.addContactMaterial(new C.ContactMaterial(props, props, { friction: 0.55, restitution: 0.09 }));
@@ -151,8 +151,8 @@ function addProp(world, name, mass, position, shape, offset = new C.Vec3(), yaw 
       mass, type: C.Body.KINEMATIC, material: mannequinMaterial,
       position: new C.Vec3(origin[0] + x, y, origin[2] + z),
       collisionFilterGroup: GROUP_RAGDOLL, collisionFilterMask: MASK_ALL,
-      angularDamping: 0.2, linearDamping: 0.08, allowSleep: true,
-      sleepSpeedLimit: 0.08, sleepTimeLimit: 0.65
+      angularDamping: 0.42, linearDamping: 0.12, allowSleep: true,
+      sleepSpeedLimit: 0.1, sleepTimeLimit: 0.55
     });
     body.addShape(new C.Box(new C.Vec3(size[0] / 2, size[1] / 2, size[2] / 2)));
     world.addBody(body);
@@ -176,7 +176,7 @@ function addProp(world, name, mass, position, shape, offset = new C.Vec3(), yaw 
     const constraint = new C.ConeTwistConstraint(human.partMap[aName].body, human.partMap[bName].body, {
       pivotA: new C.Vec3(...pivotA), pivotB: new C.Vec3(...pivotB),
       axisA: new C.Vec3(...axis), axisB: new C.Vec3(...axis),
-      angle, twistAngle: twist, maxForce: 2e5, collideConnected: false
+      angle, twistAngle: twist, maxForce: 2600, collideConnected: false
     });
     world.addConstraint(constraint);
     human.constraints.push(constraint);
@@ -202,6 +202,19 @@ function addProp(world, name, mass, position, shape, offset = new C.Vec3(), yaw 
   for (let step = 0; step < 600; step++) world.step(1 / 60, 1 / 60, 4);
   assert.equal(human.parts.length, 15);
   assert.equal(human.constraints.length, 14);
+  for (const constraint of human.constraints) {
+    const pivotA = constraint.bodyA.quaternion.vmult(constraint.pivotA, new C.Vec3());
+    const pivotB = constraint.bodyB.quaternion.vmult(constraint.pivotB, new C.Vec3());
+    const anchorA = new C.Vec3();
+    const anchorB = new C.Vec3();
+    constraint.bodyA.position.vadd(pivotA, anchorA);
+    constraint.bodyB.position.vadd(pivotB, anchorB);
+    assert.ok(anchorA.distanceTo(anchorB) < 0.22, 'ragdoll joint pivots should remain connected after impact');
+    const axisA = constraint.bodyA.quaternion.vmult(constraint.axisA, new C.Vec3()).unit();
+    const axisB = constraint.bodyB.quaternion.vmult(constraint.axisB, new C.Vec3()).unit();
+    const coneAngle = Math.acos(Math.max(-1, Math.min(1, axisA.dot(axisB))));
+    assert.ok(coneAngle <= constraint.angle + 0.42, 'ragdoll joint cone limits should prevent extreme limb bends');
+  }
   for (const part of human.parts) {
     part.body.updateAABB();
     assert.ok(Number.isFinite(part.body.position.y), `${part.key} received a non-finite position`);
