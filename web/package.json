@@ -7,7 +7,8 @@
     "build": "esbuild src/main.js --bundle --format=iife --target=es2020 --minify --outfile=../app/src/main/assets/game.js",
     "test:physics": "node tests/physics-smoke.mjs",
     "test:behavior": "node tests/mannequin-behavior-smoke.mjs",
-    "test": "npm run test:physics && npm run test:behavior"
+    "test:arsenal": "node tests/arsenal-smoke.mjs",
+    "test": "npm run test:physics && npm run test:behavior && npm run test:arsenal"
   },
   "dependencies": {
     "cannon-es": "0.20.0",

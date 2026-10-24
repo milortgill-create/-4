@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -55,6 +56,8 @@ world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, dummy
 
 const physicsRecords = [];
 const raycastTargets = [];
+const bulletSurfaceTargets = [];
+const bulletMarks = [];
 const mannequins = [];
 const color = (hex) => new THREE.Color(hex);
 
@@ -216,6 +219,10 @@ function addStaticBoxMesh(geometry, material, position, options = {}) {
   mesh.castShadow = options.castShadow ?? true;
   mesh.receiveShadow = options.receiveShadow ?? true;
   if (options.rotation) mesh.rotation.set(options.rotation[0], options.rotation[1], options.rotation[2]);
+  if (options.bulletSurface) {
+    mesh.userData.bulletSurface = true;
+    bulletSurfaceTargets.push(mesh);
+  }
   scene.add(mesh);
   return mesh;
 }
@@ -234,16 +241,16 @@ function addStaticCollider(position, halfExtents, material = floorPhysicsMateria
 }
 
 function addRoom() {
-  const floor = addStaticBoxMesh(new THREE.BoxGeometry(18, 0.5, 14), concreteFloor, [0, -0.25, 0]);
+  const floor = addStaticBoxMesh(new THREE.BoxGeometry(18, 0.5, 14), concreteFloor, [0, -0.25, 0], { bulletSurface: true });
   floor.receiveShadow = true;
   addStaticCollider([0, -0.25, 0], [9, 0.25, 7]);
 
-  addStaticBoxMesh(new THREE.BoxGeometry(18.4, 0.42, 14.4), concreteCeiling, [0, 6.08, 0]);
+  addStaticBoxMesh(new THREE.BoxGeometry(18.4, 0.42, 14.4), concreteCeiling, [0, 6.08, 0], { bulletSurface: true });
   addStaticCollider([0, 6.08, 0], [9.2, 0.21, 7.2]);
   for (const side of [-1, 1]) {
-    addStaticBoxMesh(new THREE.BoxGeometry(0.4, 6, 14), concreteWall, [side * 9, 3, 0]);
+    addStaticBoxMesh(new THREE.BoxGeometry(0.4, 6, 14), concreteWall, [side * 9, 3, 0], { bulletSurface: true });
     addStaticCollider([side * 9, 3, 0], [0.2, 3, 7]);
-    addStaticBoxMesh(new THREE.BoxGeometry(18, 6, 0.4), concreteWall, [0, 3, side * 7], { castShadow: false });
+    addStaticBoxMesh(new THREE.BoxGeometry(18, 6, 0.4), concreteWall, [0, 3, side * 7], { castShadow: false, bulletSurface: true });
     addStaticCollider([0, 3, side * 7], [9, 3, 0.2]);
   }
 
@@ -632,7 +639,7 @@ function addLimitedJoint(human, aName, bName, pivotA, pivotB, angle, twist = 0.3
 function buildMannequin(id, origin, colorIndex) {
   const human = {
     id, origin, colorIndex, skin: dummySkinMaterials[colorIndex], parts: [], partMap: {}, constraints: [],
-    active: false, hitFlash: 0, behavior: id === 'D-01' ? 'peaceful' : 'aggressive', state: 'idle',
+    active: false, dead: false, health: 100, hitFlash: 0, behavior: id === 'D-01' ? 'peaceful' : 'aggressive', state: 'idle',
     rootX: origin[0], rootZ: origin[2], yaw: 0, stateTime: 0, quietTime: 0, attackCooldown: 0,
     punchSide: 1, walkPhase: 0, wanderTarget: null, navDirection: null
   };
@@ -972,7 +979,7 @@ function mannequinFallIsSettled(human) {
 function updateMannequinAI(dt) {
   for (const human of mannequins) {
     human.hitFlash = Math.max(0, human.hitFlash - dt);
-    if (!human.active) continue;
+    if (human.dead || !human.active) continue;
     human.attackCooldown = Math.max(0, human.attackCooldown - dt);
     if (human.state === 'falling') {
       human.stateTime += dt;
@@ -1099,24 +1106,32 @@ const weaponWoodEdge = new THREE.MeshStandardMaterial({ color: 0x4c3726, roughne
 const weaponGlass = new THREE.MeshStandardMaterial({ color: 0x5186b2, roughness: 0.23, metalness: 0.26, emissive: 0x10233a, emissiveIntensity: 0.2 });
 const weaponView = new THREE.Group();
 handGroup.add(weaponView);
+const weaponModel = new THREE.Group();
+weaponView.add(weaponModel);
 const weaponBasePosition = new THREE.Vector3(0.28, -0.33, -0.78);
 const weaponBaseRotation = new THREE.Euler(0.25, 0.25, 0.015, 'XYZ');
 weaponView.position.copy(weaponBasePosition);
 weaponView.rotation.copy(weaponBaseRotation);
 const weaponHands = {};
-const magazineGroup = new THREE.Group();
-const magazineBasePosition = new THREE.Vector3(0, -0.145, 0.035);
+let magazineGroup = null;
+let magazineBasePosition = new THREE.Vector3(0, -0.145, 0.035);
+let pumpGroup = null;
+let pumpBasePosition = new THREE.Vector3(0, -0.045, -0.44);
 const muzzleFlash = new THREE.Group();
+weaponView.add(muzzleFlash);
 let muzzleFlashTimer = 0;
 let weaponRecoil = 0;
 let reloadTimer = 0;
 let reloadProgress = 0;
 let fireCooldown = 0;
 let fireHeld = false;
-let magazineAmmo = 30;
-let reserveAmmo = 90;
-const MAGAZINE_CAPACITY = 30;
-const RELOAD_DURATION = 1.25;
+let meleeTimer = 0;
+let meleeHitApplied = false;
+let shotgunPumpTimer = 0;
+let currentWeaponId = 'ak-47';
+const weaponAmmo = new Map(WEAPON_CATALOG.map((weapon) => [weapon.id, createAmmoState(weapon)]));
+let gunAudioContext = null;
+let gunNoiseBuffer = null;
 const fingerRigs = [];
 let handPose = 0;
 let handTargetPose = 0;
@@ -1147,43 +1162,60 @@ function weaponCylinder(parent, radius, length, position, material, segments = 1
   parent.add(mesh);
   return mesh;
 }
-function buildRifle() {
-  // Low-poly AK-style first-person rifle. Its bore is converged onto the screen-center sight.
-  weaponBox(weaponView, [0.205, 0.145, 0.46], [0, 0.005, 0.035], weaponSteel);
-  weaponBox(weaponView, [0.184, 0.036, 0.43], [0, 0.095, 0.025], weaponBlack);
-  weaponBox(weaponView, [0.045, 0.025, 0.47], [0, 0.132, -0.02], weaponSteel);
-  weaponBox(weaponView, [0.11, 0.02, 0.11], [0, 0.158, -0.15], weaponBlack);
-  weaponBox(weaponView, [0.018, 0.026, 0.16], [0.112, 0.025, 0.035], weaponBlack);
-  weaponBox(weaponView, [0.055, 0.036, 0.13], [0.112, 0.026, -0.03], weaponSteel);
-  weaponBox(weaponView, [0.065, 0.025, 0.10], [-0.113, 0.025, 0.105], weaponBlack);
-  weaponBox(weaponView, [0.06, 0.025, 0.10], [-0.12, -0.005, 0.16], weaponSteel);
 
-  // Barrel, front sight and muzzle brake.
-  weaponCylinder(weaponView, 0.033, 0.76, [0, 0.025, -0.575], weaponSteel, 10);
-  weaponCylinder(weaponView, 0.046, 0.13, [0, 0.025, -1.015], weaponBlack, 10);
-  weaponBox(weaponView, [0.085, 0.065, 0.08], [0, 0.115, -0.88], weaponSteel);
-  weaponBox(weaponView, [0.018, 0.075, 0.025], [0, 0.18, -0.91], weaponBlack);
-  weaponBox(weaponView, [0.13, 0.025, 0.045], [0, 0.153, -0.90], weaponSteel);
-  for (const side of [-1, 1]) weaponBox(weaponView, [0.012, 0.028, 0.045], [side * 0.043, 0.026, -1.015], weaponSteel);
+const weaponTan = new THREE.MeshStandardMaterial({ color: 0x796b52, roughness: 0.79, metalness: 0.08 });
+const weaponSteelLight = new THREE.MeshStandardMaterial({ color: 0x566065, roughness: 0.4, metalness: 0.74 });
+const weaponBlade = new THREE.MeshStandardMaterial({ color: 0x89949a, roughness: 0.31, metalness: 0.82 });
+const weaponGrip = new THREE.MeshStandardMaterial({ color: 0x252a29, roughness: 0.92, metalness: 0.02 });
+const weaponNail = new THREE.MeshStandardMaterial({ color: 0x8a8f8d, roughness: 0.38, metalness: 0.83 });
 
-  // Ribbed wooden handguard and its side rails.
-  weaponBox(weaponView, [0.17, 0.095, 0.36], [0, -0.045, -0.39], weaponWood);
-  weaponBox(weaponView, [0.178, 0.016, 0.31], [0, 0.014, -0.39], weaponWoodEdge);
+function buildMuzzleFlash() {
+  const flashCone = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.19, 6), new THREE.MeshBasicMaterial({ color: 0xffbd68, transparent: true, opacity: 0.92 }));
+  flashCone.rotation.x = -Math.PI / 2;
+  flashCone.position.z = -0.075;
+  muzzleFlash.add(flashCone);
+  muzzleFlash.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.055, 0), new THREE.MeshBasicMaterial({ color: 0xfff0b0 })));
+  const flashLight = new THREE.PointLight(0xffa743, 0, 2.2, 2);
+  muzzleFlash.add(flashLight);
+  muzzleFlash.userData.light = flashLight;
+  muzzleFlash.visible = false;
+}
+buildMuzzleFlash();
+
+function clearWeaponModel() {
+  weaponModel.traverse((child) => { if (child.geometry) child.geometry.dispose(); });
+  weaponModel.clear();
+  magazineGroup = null;
+  pumpGroup = null;
+}
+
+function buildAK47Model() {
+  weaponBox(weaponModel, [0.205, 0.145, 0.46], [0, 0.005, 0.035], weaponSteel);
+  weaponBox(weaponModel, [0.184, 0.036, 0.43], [0, 0.095, 0.025], weaponBlack);
+  weaponBox(weaponModel, [0.045, 0.025, 0.47], [0, 0.132, -0.02], weaponSteel);
+  weaponBox(weaponModel, [0.11, 0.02, 0.11], [0, 0.158, -0.15], weaponBlack);
+  weaponBox(weaponModel, [0.018, 0.026, 0.16], [0.112, 0.025, 0.035], weaponBlack);
+  weaponBox(weaponModel, [0.055, 0.036, 0.13], [0.112, 0.026, -0.03], weaponSteel);
+  weaponBox(weaponModel, [0.065, 0.025, 0.10], [-0.113, 0.025, 0.105], weaponBlack);
+  weaponBox(weaponModel, [0.06, 0.025, 0.10], [-0.12, -0.005, 0.16], weaponSteel);
+  weaponCylinder(weaponModel, 0.033, 0.76, [0, 0.025, -0.575], weaponSteel, 10);
+  weaponCylinder(weaponModel, 0.046, 0.13, [0, 0.025, -1.015], weaponBlack, 10);
+  weaponBox(weaponModel, [0.085, 0.065, 0.08], [0, 0.115, -0.88], weaponSteel);
+  weaponBox(weaponModel, [0.018, 0.075, 0.025], [0, 0.18, -0.91], weaponBlack);
+  weaponBox(weaponModel, [0.13, 0.025, 0.045], [0, 0.153, -0.90], weaponSteel);
+  for (const side of [-1, 1]) weaponBox(weaponModel, [0.012, 0.028, 0.045], [side * 0.043, 0.026, -1.015], weaponSteel);
+  weaponBox(weaponModel, [0.17, 0.095, 0.36], [0, -0.045, -0.39], weaponWood);
+  weaponBox(weaponModel, [0.178, 0.016, 0.31], [0, 0.014, -0.39], weaponWoodEdge);
   for (const side of [-1, 1]) {
-    weaponBox(weaponView, [0.014, 0.022, 0.31], [side * 0.09, -0.045, -0.39], weaponSteel);
-    for (let rib = 0; rib < 7; rib++) {
-      const z = -0.52 + rib * 0.043;
-      weaponBox(weaponView, [0.009, 0.013, 0.018], [side * 0.101, -0.045, z], weaponBlack);
-    }
+    weaponBox(weaponModel, [0.014, 0.022, 0.31], [side * 0.09, -0.045, -0.39], weaponSteel);
+    for (let rib = 0; rib < 7; rib++) weaponBox(weaponModel, [0.009, 0.013, 0.018], [side * 0.101, -0.045, -0.52 + rib * 0.043], weaponBlack);
   }
-  weaponBox(weaponView, [0.055, 0.035, 0.44], [0, 0.118, -0.39], weaponBlack);
-
-  // Rear sight, optic rails and a small blue-tinted low-poly optic like the reference.
-  weaponBox(weaponView, [0.11, 0.06, 0.08], [0, 0.16, -0.105], weaponSteel);
-  weaponBox(weaponView, [0.045, 0.047, 0.028], [0, 0.195, -0.115], weaponBlack);
+  weaponBox(weaponModel, [0.055, 0.035, 0.44], [0, 0.118, -0.39], weaponBlack);
+  weaponBox(weaponModel, [0.11, 0.06, 0.08], [0, 0.16, -0.105], weaponSteel);
+  weaponBox(weaponModel, [0.045, 0.047, 0.028], [0, 0.195, -0.115], weaponBlack);
   const optic = new THREE.Group();
   optic.position.set(0, 0.226, -0.17);
-  weaponView.add(optic);
+  weaponModel.add(optic);
   weaponCylinder(optic, 0.063, 0.28, [0, 0, -0.015], weaponBlack, 8);
   weaponCylinder(optic, 0.073, 0.055, [0, 0, 0.105], weaponSteel, 8);
   weaponCylinder(optic, 0.073, 0.04, [0, 0, -0.155], weaponSteel, 8);
@@ -1194,38 +1226,213 @@ function buildRifle() {
   opticShade.position.z = -0.177;
   opticShade.rotation.y = Math.PI;
   optic.add(opticShade);
-  weaponBox(weaponView, [0.11, 0.025, 0.22], [0, 0.178, -0.17], weaponSteel);
-
-  // Pistol grip, trigger guard, curved magazine and stock.
-  weaponBox(weaponView, [0.088, 0.22, 0.115], [0.012, -0.17, 0.165], weaponPolymer, [-0.18, 0, -0.04]);
+  weaponBox(weaponModel, [0.11, 0.025, 0.22], [0, 0.178, -0.17], weaponSteel);
+  weaponBox(weaponModel, [0.088, 0.22, 0.115], [0.012, -0.17, 0.165], weaponPolymer, [-0.18, 0, -0.04]);
   const triggerGuard = new THREE.Mesh(new THREE.TorusGeometry(0.061, 0.009, 5, 12), weaponSteel);
   triggerGuard.position.set(0, -0.105, 0.075);
-  weaponView.add(triggerGuard);
-  weaponBox(weaponView, [0.018, 0.09, 0.022], [0.015, -0.10, 0.045], weaponBlack, [0.22, 0, 0]);
-  magazineGroup.position.copy(magazineBasePosition);
-  weaponView.add(magazineGroup);
+  weaponModel.add(triggerGuard);
+  weaponBox(weaponModel, [0.018, 0.09, 0.022], [0.015, -0.10, 0.045], weaponBlack, [0.22, 0, 0]);
+  magazineGroup = new THREE.Group();
+  magazineBasePosition.set(0, -0.145, 0.035);
+  weaponModel.add(magazineGroup);
   weaponBox(magazineGroup, [0.11, 0.26, 0.17], [0, -0.13, 0], weaponPolymer, [-0.12, 0, 0]);
   weaponBox(magazineGroup, [0.116, 0.035, 0.175], [0, -0.252, -0.01], weaponBlack, [-0.12, 0, 0]);
   for (let rib = 0; rib < 4; rib++) weaponBox(magazineGroup, [0.115, 0.012, 0.18], [0, -0.06 - rib * 0.045, 0], weaponSteel, [-0.12, 0, 0]);
-  weaponBox(weaponView, [0.105, 0.105, 0.44], [0, 0.015, 0.445], weaponPolymer);
-  weaponBox(weaponView, [0.13, 0.12, 0.045], [0, 0.005, 0.67], weaponBlack);
-  weaponBox(weaponView, [0.09, 0.045, 0.24], [0, 0.078, 0.42], weaponSteel);
-  weaponBox(weaponView, [0.18, 0.012, 0.12], [0, -0.048, 0.57], weaponBlack);
-
-  muzzleFlash.position.set(0, 0.025, -1.09);
-  const flashCone = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.19, 6), new THREE.MeshBasicMaterial({ color: 0xffbd68, transparent: true, opacity: 0.92 }));
-  flashCone.rotation.x = -Math.PI / 2;
-  flashCone.position.z = -0.075;
-  muzzleFlash.add(flashCone);
-  const flashCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.055, 0), new THREE.MeshBasicMaterial({ color: 0xfff0b0 }));
-  muzzleFlash.add(flashCore);
-  const flashLight = new THREE.PointLight(0xffa743, 0, 2.2, 2);
-  muzzleFlash.add(flashLight);
-  muzzleFlash.userData.light = flashLight;
-  muzzleFlash.visible = false;
-  weaponView.add(muzzleFlash);
+  weaponBox(weaponModel, [0.105, 0.105, 0.44], [0, 0.015, 0.445], weaponPolymer);
+  weaponBox(weaponModel, [0.13, 0.12, 0.045], [0, 0.005, 0.67], weaponBlack);
+  weaponBox(weaponModel, [0.09, 0.045, 0.24], [0, 0.078, 0.42], weaponSteel);
+  weaponBox(weaponModel, [0.18, 0.012, 0.12], [0, -0.048, 0.57], weaponBlack);
 }
-buildRifle();
+
+function buildM4A1Model() {
+  weaponBox(weaponModel, [0.2, 0.15, 0.43], [0, 0.005, 0.035], weaponSteel);
+  weaponBox(weaponModel, [0.19, 0.045, 0.39], [0, 0.097, 0.025], weaponBlack);
+  weaponBox(weaponModel, [0.05, 0.025, 0.55], [0, 0.134, -0.09], weaponSteel);
+  weaponBox(weaponModel, [0.17, 0.105, 0.4], [0, -0.025, -0.39], weaponPolymer);
+  weaponBox(weaponModel, [0.19, 0.02, 0.42], [0, 0.045, -0.38], weaponBlack);
+  for (const side of [-1, 1]) {
+    weaponBox(weaponModel, [0.015, 0.025, 0.35], [side * 0.095, -0.025, -0.4], weaponSteel);
+    for (let rib = 0; rib < 6; rib++) weaponBox(weaponModel, [0.012, 0.012, 0.025], [side * 0.105, -0.025, -0.55 + rib * 0.06], weaponBlack);
+  }
+  weaponCylinder(weaponModel, 0.029, 0.88, [0, 0.02, -0.75], weaponSteel, 10);
+  weaponCylinder(weaponModel, 0.043, 0.11, [0, 0.02, -1.245], weaponBlack, 10);
+  weaponBox(weaponModel, [0.045, 0.12, 0.04], [0, 0.17, -1.11], weaponSteel);
+  weaponBox(weaponModel, [0.09, 0.04, 0.08], [0, 0.125, -1.08], weaponBlack);
+  weaponBox(weaponModel, [0.17, 0.024, 0.48], [0, 0.16, -0.17], weaponBlack);
+  weaponBox(weaponModel, [0.12, 0.075, 0.11], [0, 0.205, -0.12], weaponSteel);
+  const optic = new THREE.Group();
+  optic.position.set(0, 0.25, -0.19);
+  weaponModel.add(optic);
+  weaponCylinder(optic, 0.055, 0.25, [0, 0, 0], weaponBlack, 8);
+  weaponCylinder(optic, 0.064, 0.035, [0, 0, 0.12], weaponSteel, 8);
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.044, 8), weaponGlass);
+  glass.position.z = 0.14;
+  optic.add(glass);
+  weaponBox(weaponModel, [0.09, 0.035, 0.09], [0, 0.19, 0.03], weaponBlack);
+  weaponBox(weaponModel, [0.09, 0.19, 0.12], [0.012, -0.15, 0.16], weaponPolymer, [-0.17, 0, 0]);
+  weaponBox(weaponModel, [0.11, 0.04, 0.4], [0, -0.008, 0.44], weaponBlack);
+  weaponBox(weaponModel, [0.08, 0.11, 0.08], [0, 0.005, 0.64], weaponPolymer);
+  weaponBox(weaponModel, [0.07, 0.095, 0.06], [0, 0.015, 0.72], weaponBlack);
+  magazineGroup = new THREE.Group();
+  magazineBasePosition.set(0, -0.145, 0.035);
+  weaponModel.add(magazineGroup);
+  weaponBox(magazineGroup, [0.11, 0.26, 0.16], [0, -0.13, 0], weaponBlack, [-0.06, 0, 0]);
+  weaponBox(magazineGroup, [0.12, 0.028, 0.17], [0, -0.255, -0.01], weaponSteel);
+  for (let rib = 0; rib < 4; rib++) weaponBox(magazineGroup, [0.115, 0.012, 0.17], [0, -0.07 - rib * 0.045, 0], weaponTan);
+  weaponBox(weaponModel, [0.18, 0.012, 0.13], [0, -0.045, 0.56], weaponBlack);
+}
+
+function buildPistolModel(weapon) {
+  const isTT = weapon.id === 'tt';
+  const isGlock = weapon.id === 'glock-17';
+  const slideLength = isTT ? 0.39 : isGlock ? 0.34 : 0.32;
+  const slideZ = -0.055;
+  const slideMaterial = isGlock ? weaponPolymer : weaponSteel;
+  weaponBox(weaponModel, [0.14, 0.095, 0.31], [0, -0.035, 0.055], weaponBlack);
+  weaponBox(weaponModel, [0.13, 0.105, slideLength], [0, 0.035, slideZ], slideMaterial);
+  weaponBox(weaponModel, [0.12, 0.018, slideLength * 0.78], [0, 0.092, slideZ - 0.015], weaponSteelLight);
+  weaponCylinder(weaponModel, isTT ? 0.025 : 0.022, isTT ? 0.35 : 0.28, [0, 0.025, -0.27], weaponBlack, 9);
+  weaponBox(weaponModel, [0.09, 0.19, 0.12], [0.008, -0.15, 0.155], isGlock ? weaponPolymer : weaponGrip, [-0.19, 0, 0]);
+  weaponBox(weaponModel, [0.095, 0.035, 0.13], [0.008, -0.235, 0.16], weaponBlack, [-0.19, 0, 0]);
+  weaponBox(weaponModel, [0.013, 0.075, 0.015], [0.02, -0.1, 0.08], weaponSteel, [0.22, 0, 0]);
+  weaponBox(weaponModel, [0.035, 0.038, 0.035], [0, 0.105, 0.075], weaponBlack);
+  weaponBox(weaponModel, [0.035, 0.04, 0.03], [0, 0.105, slideZ - slideLength * 0.46], weaponBlack);
+  if (isGlock) {
+    weaponBox(weaponModel, [0.17, 0.035, 0.18], [0, -0.068, -0.11], weaponBlack);
+    weaponBox(weaponModel, [0.105, 0.018, 0.08], [0, 0.1, -0.17], weaponTan);
+  } else {
+    weaponBox(weaponModel, [0.018, 0.075, 0.19], [0.076, 0.035, 0.035], weaponBlack);
+    weaponBox(weaponModel, [0.02, 0.07, 0.16], [-0.078, 0.035, 0.035], weaponSteelLight);
+    if (isTT) weaponBox(weaponModel, [0.012, 0.085, 0.17], [0.075, 0.035, -0.12], weaponSteelLight);
+    weaponBox(weaponModel, [0.09, 0.14, 0.018], [0, -0.16, 0.22], weaponWoodEdge, [-0.19, 0, 0]);
+  }
+  magazineGroup = new THREE.Group();
+  magazineBasePosition.set(0, -0.17, 0.15);
+  weaponModel.add(magazineGroup);
+  weaponBox(magazineGroup, [0.09, 0.18, 0.105], [0, -0.08, 0], weaponBlack, [-0.17, 0, 0]);
+  weaponBox(magazineGroup, [0.095, 0.018, 0.11], [0, -0.17, -0.005], weaponSteelLight, [-0.17, 0, 0]);
+}
+
+function buildShotgunModel() {
+  weaponBox(weaponModel, [0.2, 0.17, 0.39], [0, 0.005, 0.02], weaponSteel);
+  weaponBox(weaponModel, [0.14, 0.055, 0.31], [0, 0.11, 0.01], weaponBlack);
+  weaponCylinder(weaponModel, 0.038, 0.98, [0, 0.052, -0.77], weaponSteelLight, 10);
+  weaponCylinder(weaponModel, 0.046, 0.12, [0, 0.052, -1.32], weaponBlack, 10);
+  weaponCylinder(weaponModel, 0.027, 0.84, [0, -0.055, -0.63], weaponBlack, 10);
+  weaponBox(weaponModel, [0.045, 0.1, 0.08], [0, 0.135, -1.17], weaponSteel);
+  weaponBox(weaponModel, [0.11, 0.035, 0.17], [0, 0.13, -0.12], weaponBlack);
+  weaponBox(weaponModel, [0.11, 0.21, 0.13], [0, -0.16, 0.16], weaponPolymer, [-0.14, 0, 0]);
+  weaponBox(weaponModel, [0.14, 0.12, 0.43], [0, 0.0, 0.48], weaponWood);
+  weaponBox(weaponModel, [0.16, 0.13, 0.05], [0, -0.005, 0.69], weaponBlack);
+  weaponBox(weaponModel, [0.19, 0.012, 0.1], [0, -0.06, 0.57], weaponBlack);
+  pumpGroup = new THREE.Group();
+  pumpBasePosition.set(0, -0.035, -0.48);
+  pumpGroup.position.copy(pumpBasePosition);
+  weaponModel.add(pumpGroup);
+  weaponBox(pumpGroup, [0.16, 0.11, 0.26], [0, 0, 0], weaponWood);
+  weaponBox(pumpGroup, [0.17, 0.018, 0.23], [0, 0.052, 0], weaponWoodEdge);
+  for (let rib = 0; rib < 5; rib++) weaponBox(pumpGroup, [0.17, 0.014, 0.018], [0, -0.045 + rib * 0.021, -0.105], weaponBlack);
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.009, 5, 12), weaponSteel);
+  guard.position.set(0, -0.095, 0.11);
+  weaponModel.add(guard);
+  weaponBox(weaponModel, [0.018, 0.08, 0.02], [0.01, -0.095, 0.08], weaponBlack);
+  magazineGroup = null;
+}
+
+function buildMeleeModel(weapon) {
+  if (weapon.model === 'cleaver') {
+    weaponBox(weaponModel, [0.075, 0.24, 0.085], [0, -0.1, 0.2], weaponGrip, [-0.12, 0, 0]);
+    weaponBox(weaponModel, [0.09, 0.055, 0.095], [0, -0.205, 0.2], weaponSteel);
+    weaponBox(weaponModel, [0.31, 0.24, 0.065], [-0.02, 0.075, -0.17], weaponBlade, [0, 0, -0.08]);
+    weaponBox(weaponModel, [0.26, 0.025, 0.072], [-0.035, -0.048, -0.18], weaponSteelLight, [0, 0, -0.08]);
+    weaponBox(weaponModel, [0.075, 0.22, 0.06], [0.1, 0.08, -0.19], weaponSteel, [0, 0, -0.1]);
+    weaponBox(weaponModel, [0.025, 0.025, 0.02], [0, -0.07, 0.2], weaponTan);
+  } else if (weapon.model === 'sledgehammer') {
+    weaponCylinder(weaponModel, 0.033, 0.98, [0, -0.02, -0.08], weaponWoodEdge, 8);
+    weaponCylinder(weaponModel, 0.043, 0.34, [0, -0.02, 0.24], weaponGrip, 8);
+    for (let ring = 0; ring < 4; ring++) weaponBox(weaponModel, [0.09, 0.012, 0.018], [0, -0.02, 0.12 + ring * 0.055], weaponSteel);
+    weaponBox(weaponModel, [0.42, 0.2, 0.22], [0, 0.02, -0.64], weaponSteel);
+    weaponBox(weaponModel, [0.11, 0.23, 0.24], [-0.18, 0.02, -0.64], weaponBlack);
+    weaponBox(weaponModel, [0.11, 0.23, 0.24], [0.18, 0.02, -0.64], weaponBlack);
+    weaponBox(weaponModel, [0.26, 0.035, 0.235], [0, 0.135, -0.64], weaponSteelLight);
+  } else {
+    weaponCylinder(weaponModel, 0.058, 0.88, [0, -0.005, -0.17], weaponWood, 9);
+    weaponCylinder(weaponModel, 0.045, 0.28, [0, -0.01, 0.33], weaponGrip, 8);
+    weaponBox(weaponModel, [0.12, 0.1, 0.04], [0, -0.005, 0.17], weaponBlack);
+    for (let nail = 0; nail < 7; nail++) {
+      const z = -0.52 + nail * 0.105;
+      const side = nail % 2 === 0 ? 1 : -1;
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.021, 0.13, 4), weaponNail);
+      spike.position.set(side * 0.062, 0.018, z);
+      spike.rotation.z = side * Math.PI / 2;
+      weaponModel.add(spike);
+      weaponBox(weaponModel, [0.025, 0.025, 0.025], [side * 0.035, 0.018, z + 0.035], weaponBlack);
+    }
+  }
+}
+
+function setHandTarget(which, palmTarget) {
+  const hand = weaponHands[which];
+  if (!hand) return;
+  const mirrored = which === 'left' ? -1 : 1;
+  const position = new THREE.Vector3(
+    palmTarget[0] - mirrored * 0.15,
+    palmTarget[1] - 0.285,
+    palmTarget[2] + 0.025
+  );
+  hand.userData.gripPosition = position;
+  hand.userData.gripRotation = new THREE.Euler(which === 'left' ? 0.08 : -0.06, 0, which === 'left' ? 0.05 : -0.05);
+  hand.position.copy(position);
+  hand.rotation.copy(hand.userData.gripRotation);
+}
+
+function buildWeaponModel(weapon) {
+  clearWeaponModel();
+  if (weapon.type === 'melee') buildMeleeModel(weapon);
+  else if (weapon.model === 'ak') buildAK47Model();
+  else if (weapon.model === 'm4') buildM4A1Model();
+  else if (weapon.type === 'pistol') buildPistolModel(weapon);
+  else if (weapon.type === 'shotgun') buildShotgunModel();
+  const cameraPose = weapon.type === 'melee'
+    ? { position: [0.29, -0.34, -0.82], rotation: [0.2, 0.22, 0.04], left: [-0.08, -0.10, -0.055], right: [0.07, -0.105, 0.18] }
+    : weapon.type === 'pistol'
+      ? { position: [0.3, -0.39, -0.69], rotation: [0.18, 0.22, 0.02], left: [-0.045, -0.14, 0.17], right: [0.035, -0.105, 0.15] }
+      : weapon.type === 'shotgun'
+        ? { position: [0.28, -0.34, -0.82], rotation: [0.23, 0.24, 0.015], left: [-0.09, -0.015, -0.46], right: [0.07, -0.105, 0.17] }
+        : { position: [0.28, -0.33, -0.78], rotation: [0.25, 0.25, 0.015], left: [-0.09, -0.015, -0.39], right: [0.07, -0.105, 0.17] };
+  weaponBasePosition.set(...cameraPose.position);
+  weaponBaseRotation.set(...cameraPose.rotation, 'XYZ');
+  weaponView.position.copy(weaponBasePosition);
+  weaponView.rotation.copy(weaponBaseRotation);
+  setHandTarget('left', cameraPose.left);
+  setHandTarget('right', cameraPose.right);
+  const muzzleZ = weapon.type === 'pistol' ? -0.43 : weapon.type === 'shotgun' ? -1.38 : weapon.type === 'melee' ? 0 : -1.09;
+  muzzleFlash.position.set(0, weapon.type === 'shotgun' ? 0.052 : 0.025, muzzleZ);
+  muzzleFlash.visible = false;
+  weaponModel.visible = true;
+}
+
+function currentWeapon() { return WEAPON_BY_ID.get(currentWeaponId) || WEAPON_BY_ID.get('ak-47'); }
+function currentWeaponAmmo() { return weaponAmmo.get(currentWeaponId); }
+function equipWeapon(id, announce = true) {
+  const weapon = WEAPON_BY_ID.get(id);
+  if (!weapon) return false;
+  currentWeaponId = id;
+  fireHeld = false;
+  fireCooldown = 0;
+  reloadTimer = 0;
+  reloadProgress = 0;
+  meleeTimer = 0;
+  meleeHitApplied = false;
+  shotgunPumpTimer = 0;
+  weaponRecoil = 0;
+  muzzleFlashTimer = 0;
+  buildWeaponModel(weapon);
+  updateAmmoHUD();
+  if (announce) toast(`${weapon.name.toUpperCase()} · ГОТОВО`, 0.9);
+  return true;
+}
+
 function buildHand(side) {
   const group = new THREE.Group();
   const mirrored = side < 0 ? -1 : 1;
@@ -1275,14 +1482,15 @@ function buildHand(side) {
   fingerRigs.push({ base: thumb, distal: thumbTip, fan: 0.54, side: mirrored, thumb: true });
 
   const palmTarget = side < 0 ? [-0.09, -0.015, -0.39] : [0.07, -0.105, 0.17];
-  group.position.set(palmTarget[0] - mirrored * 0.15, palmTarget[1] - 0.285, palmTarget[2] + 0.025);
-  group.rotation.set(side < 0 ? 0.08 : -0.06, 0, -side * 0.05);
   weaponView.add(group);
-  weaponHands[side < 0 ? 'left' : 'right'] = group;
+  const which = side < 0 ? 'left' : 'right';
+  weaponHands[which] = group;
+  setHandTarget(which, palmTarget);
 }
 buildHand(-1);
 buildHand(1);
 handPose = handTargetPose = 0.78;
+equipWeapon(currentWeaponId, false);
 function updateHandPose(dt) {
   handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
   for (const rig of fingerRigs) {
@@ -1299,43 +1507,151 @@ function updateHandPose(dt) {
 }
 
 function updateAmmoHUD() {
+  const weapon = currentWeapon();
+  const ammo = currentWeaponAmmo();
   const label = $('ammo-count');
-  if (label) label.textContent = `${magazineAmmo} / ${reserveAmmo}`;
+  if (label) label.textContent = weapon.magazineSize === null ? '' : `${ammo.magazine} / ${ammo.reserve}`;
+  const fireLabel = $('fire-label');
+  if (fireLabel) fireLabel.textContent = weapon.type === 'melee' ? 'УДАР' : 'ОГОНЬ';
   const fireButton = $('fire-button');
-  if (fireButton) fireButton.disabled = magazineAmmo <= 0 && reserveAmmo <= 0;
+  if (fireButton) {
+    fireButton.disabled = weapon.magazineSize !== null && ammo.magazine <= 0 && ammo.reserve <= 0;
+    fireButton.setAttribute('aria-label', `${weapon.name}: ${weapon.type === 'melee' ? 'удар' : 'огонь'}`);
+    fireButton.classList.toggle('melee-mode', weapon.type === 'melee');
+  }
+  const reloadButton = $('reload-button');
+  if (reloadButton) reloadButton.style.display = weapon.magazineSize === null ? 'none' : 'grid';
+}
+
+function ensureGunAudio() {
+  if (gunAudioContext) return gunAudioContext;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  gunAudioContext = new AudioContextClass();
+  const frames = Math.floor(gunAudioContext.sampleRate * 0.65);
+  gunNoiseBuffer = gunAudioContext.createBuffer(1, frames, gunAudioContext.sampleRate);
+  const data = gunNoiseBuffer.getChannelData(0);
+  for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+  return gunAudioContext;
+}
+
+function playWeaponSound(weapon, action = 'fire') {
+  try {
+    const context = ensureGunAudio();
+    if (!context) return;
+    if (context.state === 'suspended') context.resume();
+    const now = context.currentTime;
+    const preset = weapon.sound;
+    const duration = action === 'fire' ? preset.duration : action === 'swing' ? 0.17 : action === 'impact' ? 0.095 : 0.075;
+    const centerFrequency = action === 'swing' ? preset.swing : action === 'impact' ? preset.impact : preset.frequency;
+    const noiseLevel = action === 'fire' ? preset.noise : action === 'impact' ? preset.noise * 0.48 : action === 'swing' ? 0.18 : 0.08;
+    const filter = context.createBiquadFilter();
+    filter.type = action === 'swing' ? 'highpass' : 'lowpass';
+    filter.frequency.setValueAtTime(action === 'fire' ? preset.filter : Math.max(240, preset.filter * 0.72), now);
+    filter.Q.value = action === 'swing' ? 0.7 : 0.5;
+    const noiseGain = context.createGain();
+    noiseGain.gain.setValueAtTime(Math.min(0.34, noiseLevel * 0.24), now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    const noiseSource = context.createBufferSource();
+    noiseSource.buffer = gunNoiseBuffer;
+    noiseSource.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(context.destination);
+    noiseSource.start(now);
+    noiseSource.stop(now + duration);
+
+    const oscillator = context.createOscillator();
+    oscillator.type = action === 'fire' ? (preset.waveform || 'triangle') : 'sine';
+    oscillator.frequency.setValueAtTime(centerFrequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(32, centerFrequency * (action === 'swing' ? 0.52 : 0.36)), now + duration);
+    const toneGain = context.createGain();
+    const initialGain = action === 'fire' ? preset.bass : action === 'impact' ? preset.bass * 1.2 : action === 'swing' ? 0.015 : 0.022;
+    toneGain.gain.setValueAtTime(Math.max(0.0001, initialGain), now);
+    toneGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.connect(toneGain);
+    toneGain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + duration);
+  } catch (_) {
+    // Audio is an enhancement; unsupported WebViews still retain all firing mechanics.
+  }
 }
 
 function startReload() {
-  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0) return;
-  if (magazineAmmo >= MAGAZINE_CAPACITY) { toast('МАГАЗИН ПОЛОН', 0.85); return; }
-  if (reserveAmmo <= 0) { toast('НЕТ ПАТРОНОВ', 0.9); return; }
+  const weapon = currentWeapon();
+  const ammo = currentWeaponAmmo();
+  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0 || weapon.magazineSize === null) return;
+  if (ammo.magazine >= weapon.magazineSize) { toast('МАГАЗИН ПОЛОН', 0.85); return; }
+  if (ammo.reserve <= 0) { toast('НЕТ ПАТРОНОВ', 0.9); return; }
   fireHeld = false;
-  reloadTimer = RELOAD_DURATION;
+  reloadTimer = weapon.reloadDuration;
   reloadProgress = 0;
   weaponRecoil = 0;
+  playWeaponSound(weapon, 'reload');
   toast('ПЕРЕЗАРЯДКА', 0.8);
 }
 
 function completeReload() {
-  const needed = MAGAZINE_CAPACITY - magazineAmmo;
-  const loaded = Math.min(needed, reserveAmmo);
-  magazineAmmo += loaded;
-  reserveAmmo -= loaded;
+  const weapon = currentWeapon();
+  const loaded = reloadAmmo(weapon, currentWeaponAmmo());
   reloadProgress = 1;
   updateAmmoHUD();
-  toast('ГОТОВО', 0.65);
+  if (loaded > 0) toast('ГОТОВО', 0.65);
 }
 
-function applyWeaponHit(meta, direction) {
+function createBulletMark(hit) {
+  const mark = new THREE.Group();
+  const normal = hit.face?.normal?.clone() || new THREE.Vector3(0, 0, 1);
+  hit.object.updateWorldMatrix(true, false);
+  normal.transformDirection(hit.object.matrixWorld).normalize();
+  const holeMaterial = new THREE.MeshBasicMaterial({ color: 0x111515, transparent: true, opacity: 0.96, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 });
+  const edgeMaterial = new THREE.MeshBasicMaterial({ color: 0x6d6250, transparent: true, opacity: 0.76, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 });
+  const edge = new THREE.Mesh(new THREE.RingGeometry(0.023, 0.035, 8), edgeMaterial);
+  const hole = new THREE.Mesh(new THREE.CircleGeometry(0.024, 8), holeMaterial);
+  mark.add(edge, hole);
+  mark.position.copy(hit.point).addScaledVector(normal, 0.004);
+  mark.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  scene.add(mark);
+  bulletMarks.push({ object: mark, life: 22, maxLife: 22 });
+  if (bulletMarks.length > 72) {
+    const oldest = bulletMarks.shift();
+    removeBulletMark(oldest);
+  }
+}
+
+function removeBulletMark(record) {
+  if (!record?.object) return;
+  scene.remove(record.object);
+  record.object.traverse((child) => {
+    child.geometry?.dispose();
+    if (child.material && child.material !== weaponBlack) child.material.dispose?.();
+  });
+}
+
+function updateBulletMarks(dt) {
+  for (let i = bulletMarks.length - 1; i >= 0; i--) {
+    const record = bulletMarks[i];
+    record.life -= dt;
+    const opacity = THREE.MathUtils.clamp(record.life / record.maxLife, 0, 1);
+    record.object.traverse((child) => { if (child.material?.transparent) child.material.opacity = opacity * (child.geometry?.type === 'RingGeometry' ? 0.76 : 0.96); });
+    if (record.life <= 0) {
+      bulletMarks.splice(i, 1);
+      removeBulletMark(record);
+    }
+  }
+}
+
+function applyWeaponHit(meta, direction, weapon, damageMultiplier = 1) {
   if (!meta || meta.isStored || meta.isHeld) return;
   if (meta.kind === 'mannequin' && meta.human) {
     const human = meta.human;
     const part = human.partMap[meta.key] || human.partMap.torso;
+    const result = damageMannequin(human, weapon, meta.key, damageMultiplier);
+    human.hitFlash = 0.32;
+    const impactDirection = new CANNON.Vec3(direction.x, direction.y, direction.z);
     if (!human.active) {
-      activateMannequin(human, part, 32, new CANNON.Vec3(direction.x, direction.y, direction.z), false);
-      return;
-    }
-    if (human.state !== 'falling') {
+      activateMannequin(human, part, Math.max(6, result.damage * 0.18), impactDirection, false);
+    } else if (human.state !== 'falling' && !human.dead) {
       human.state = 'falling';
       human.stateTime = 0;
       human.quietTime = 0;
@@ -1348,52 +1664,93 @@ function applyWeaponHit(meta, direction) {
       world.broadphase.dirty = true;
     }
     if (part.body.type === CANNON.Body.DYNAMIC) {
-      part.body.applyImpulse(new CANNON.Vec3(direction.x * 11, direction.y * 11, direction.z * 11), new CANNON.Vec3());
+      const force = weapon.type === 'melee' ? 5 + result.damage * 0.25 : 1.8 + result.damage * 0.12;
+      part.body.applyImpulse(new CANNON.Vec3(direction.x * force, direction.y * force, direction.z * force), new CANNON.Vec3());
     }
+    if (result.lethal) {
+      human.dead = true;
+      human.active = true;
+      human.state = 'dead';
+    }
+    if (!weapon.pellets) playWeaponSound(weapon, 'impact');
+    toast(`${human.id} · ${weapon.name.toUpperCase()} −${result.damage} ОЗ · ${result.health} ОЗ`, 1.05);
     return;
   }
-  if (meta.kind === 'prop' && meta.body && meta.body.type === CANNON.Body.DYNAMIC) {
-    meta.body.applyImpulse(new CANNON.Vec3(direction.x * 2.4, direction.y * 2.4, direction.z * 2.4), new CANNON.Vec3());
+  if (meta.kind === 'prop' && meta.body?.type === CANNON.Body.DYNAMIC) {
+    const scale = weapon.type === 'melee' ? 7 : weapon.type === 'shotgun' ? 3.5 : 2.4;
+    meta.body.applyImpulse(new CANNON.Vec3(direction.x * scale, direction.y * scale, direction.z * scale), new CANNON.Vec3());
     meta.body.wakeUp();
   }
 }
 
+const weaponRaycaster = new THREE.Raycaster();
+
+function traceShotRay(weapon, offsetX = 0, offsetY = 0, damageMultiplier = 1) {
+  camera.updateMatrixWorld(true);
+  weaponRaycaster.far = weapon.range;
+  weaponRaycaster.setFromCamera(new THREE.Vector2(offsetX, offsetY), camera);
+  const targets = [...raycastTargets, ...bulletSurfaceTargets];
+  const hit = traceHitscan(weaponRaycaster, targets)[0];
+  if (!hit) return null;
+  const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
+  if (meta) applyWeaponHit(meta, weaponRaycaster.ray.direction, weapon, damageMultiplier);
+  else if (hit.object.userData.bulletSurface) createBulletMark(hit);
+  return hit;
+}
+
+function traceMeleeHit(weapon) {
+  makeCameraDirection();
+  traceShotRay(weapon);
+}
+
 function fireWeapon() {
+  const weapon = currentWeapon();
+  const ammo = currentWeaponAmmo();
   if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0 || fireCooldown > 0) return;
-  if (magazineAmmo <= 0) {
+  if (weapon.type === 'melee') {
+    if (meleeTimer > 0) return;
+    meleeTimer = weapon.swingDuration;
+    meleeHitApplied = false;
+    fireCooldown = weapon.cooldown;
+    fireHeld = false;
+    playWeaponSound(weapon, 'swing');
+    return;
+  }
+  if (!consumeAmmo(weapon, ammo)) {
     startReload();
     return;
   }
-  magazineAmmo--;
   updateAmmoHUD();
-  fireCooldown = 0.135;
-  weaponRecoil = 1;
-  shakeAmount = Math.min(0.5, shakeAmount + 0.13);
-  pitch = THREE.MathUtils.clamp(pitch + 0.012, -1.18, 1.18);
-  muzzleFlashTimer = 0.075;
+  fireCooldown = weapon.cooldown;
+  weaponRecoil = weapon.type === 'shotgun' ? 1.25 : weapon.type === 'rifle' ? 0.9 : 0.7;
+  shakeAmount = Math.min(0.5, shakeAmount + (weapon.type === 'shotgun' ? 0.22 : 0.1));
+  pitch = THREE.MathUtils.clamp(pitch + (weapon.type === 'shotgun' ? 0.026 : 0.009), -1.18, 1.18);
+  playWeaponSound(weapon, 'fire');
+  muzzleFlashTimer = weapon.type === 'shotgun' ? 0.11 : 0.075;
   muzzleFlash.visible = true;
-  muzzleFlash.userData.light.intensity = 3.2;
+  muzzleFlash.userData.light.intensity = weapon.type === 'shotgun' ? 4.1 : 2.8;
   makeCameraDirection();
-  weaponRaycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-  const hits = weaponRaycaster.intersectObjects(raycastTargets, true);
-  for (const hit of hits) {
-    const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
-    if (!meta || meta.isHeld || meta.isStored) continue;
-    applyWeaponHit(meta, lookVector);
-    break;
+  if (weapon.pellets) {
+    for (let pellet = 0; pellet < weapon.pellets; pellet++) {
+      const angle = pellet * 2.399963229728653;
+      const radius = pellet === 0 ? 0 : weapon.spread * Math.sqrt(pellet / (weapon.pellets - 1));
+      traceShotRay(weapon, Math.cos(angle) * radius, Math.sin(angle) * radius, 1);
+    }
+    shotgunPumpTimer = 0.34;
+  } else {
+    traceShotRay(weapon);
   }
+  if (!weapon.automatic) fireHeld = false;
 }
 
-const weaponRaycaster = new THREE.Raycaster();
-weaponRaycaster.far = 42;
-
 function updateWeapon(dt) {
+  const weapon = currentWeapon();
   fireCooldown = Math.max(0, fireCooldown - dt);
   weaponRecoil = THREE.MathUtils.damp(weaponRecoil, 0, 18, dt);
   if (fireHeld && fireCooldown <= 0 && reloadTimer <= 0) fireWeapon();
   if (reloadTimer > 0) {
     reloadTimer = Math.max(0, reloadTimer - dt);
-    reloadProgress = 1 - reloadTimer / RELOAD_DURATION;
+    reloadProgress = 1 - reloadTimer / weapon.reloadDuration;
     if (reloadTimer === 0) completeReload();
   }
   if (muzzleFlashTimer > 0) {
@@ -1403,24 +1760,41 @@ function updateWeapon(dt) {
       muzzleFlash.userData.light.intensity = 0;
     }
   }
-  const reloadMotion = reloadTimer > 0 ? Math.sin(reloadProgress * Math.PI) : 0;
-  weaponView.position.set(
-    weaponBasePosition.x,
-    weaponBasePosition.y - weaponRecoil * 0.035 - reloadMotion * 0.07,
-    weaponBasePosition.z + weaponRecoil * 0.065
-  );
-  weaponView.rotation.set(
-    weaponBaseRotation.x + weaponRecoil * 0.11 - reloadMotion * 0.08,
-    weaponBaseRotation.y,
-    weaponBaseRotation.z + reloadMotion * 0.07
-  );
-  magazineGroup.position.set(magazineBasePosition.x, magazineBasePosition.y - reloadMotion * 0.18, magazineBasePosition.z + reloadMotion * 0.035);
-  magazineGroup.rotation.x = -reloadMotion * 0.24;
-  if (weaponHands.left) {
-    weaponHands.left.position.y = -0.30 - reloadMotion * 0.11;
-    weaponHands.left.position.z = -0.355 + reloadMotion * 0.12;
-    weaponHands.left.rotation.x = 0.08 - reloadMotion * 0.22;
+  let reloadMotion = reloadTimer > 0 ? Math.sin(reloadProgress * Math.PI) : 0;
+  if (shotgunPumpTimer > 0) {
+    shotgunPumpTimer = Math.max(0, shotgunPumpTimer - dt);
+    const pumpProgress = 1 - shotgunPumpTimer / 0.34;
+    if (pumpGroup) pumpGroup.position.set(pumpBasePosition.x, pumpBasePosition.y, pumpBasePosition.z + Math.sin(pumpProgress * Math.PI) * 0.13);
+  } else if (pumpGroup) {
+    pumpGroup.position.copy(pumpBasePosition);
   }
+  if (meleeTimer > 0) {
+    meleeTimer = Math.max(0, meleeTimer - dt);
+    const swingProgress = 1 - meleeTimer / weapon.swingDuration;
+    const swing = Math.sin(swingProgress * Math.PI);
+    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - swing * 0.12, weaponBasePosition.z + swing * 0.08);
+    weaponView.rotation.set(weaponBaseRotation.x + swing * 0.36, weaponBaseRotation.y - swing * 0.12, weaponBaseRotation.z - swing * 0.92);
+    if (!meleeHitApplied && swingProgress >= 0.43) {
+      meleeHitApplied = true;
+      traceMeleeHit(weapon);
+    }
+  } else {
+    weaponView.position.set(weaponBasePosition.x, weaponBasePosition.y - weaponRecoil * 0.035 - reloadMotion * 0.07, weaponBasePosition.z + weaponRecoil * 0.065);
+    weaponView.rotation.set(weaponBaseRotation.x + weaponRecoil * 0.11 - reloadMotion * 0.08, weaponBaseRotation.y, weaponBaseRotation.z + reloadMotion * 0.07);
+  }
+  if (magazineGroup) {
+    magazineGroup.position.set(magazineBasePosition.x, magazineBasePosition.y - reloadMotion * 0.18, magazineBasePosition.z + reloadMotion * 0.035);
+    magazineGroup.rotation.x = -reloadMotion * 0.24;
+  }
+  if (weaponHands.left) {
+    const grip = weaponHands.left.userData.gripPosition;
+    const rotation = weaponHands.left.userData.gripRotation;
+    if (grip && rotation) {
+      weaponHands.left.position.set(grip.x, grip.y - reloadMotion * 0.11, grip.z + reloadMotion * 0.12);
+      weaponHands.left.rotation.set(rotation.x - reloadMotion * 0.22, rotation.y, rotation.z);
+    }
+  }
+  if (pumpGroup && reloadTimer > 0) pumpGroup.position.z = pumpBasePosition.z + reloadMotion * 0.08;
   weaponView.visible = !dead && !heldBody;
 }
 
@@ -1503,6 +1877,8 @@ let deathTimer = 0;
 let pendingDeathRelease = false;
 let selectedBodyPart = null;
 let inventoryOpen = false;
+let inventoryMode = 'bag';
+let selectedCatalogWeaponId = currentWeaponId;
 let menuOpen = false;
 let inventoryItems = [];
 let selectedInventoryId = null;
@@ -1853,6 +2229,7 @@ function findInventorySlot(width, height) {
 function selectInventoryItem(id) {
   const item = inventoryItems.find((entry) => entry.id === id);
   if (!item) return;
+  setInventoryTab('bag');
   selectedInventoryId = id;
   $('inventory-selected-name').textContent = item.meta.name;
   $('inventory-selected-weight').textContent = `${item.meta.mass.toFixed(1)} кг`;
@@ -1867,9 +2244,65 @@ function selectInventoryItem(id) {
   }
 }
 
+function selectCatalogWeapon(id) {
+  const weapon = WEAPON_BY_ID.get(id);
+  if (!weapon) return;
+  inventoryMode = 'all';
+  selectedCatalogWeaponId = id;
+  $('inventory-tab-bag').classList.remove('active');
+  $('inventory-tab-bag').setAttribute('aria-selected', 'false');
+  $('inventory-tab-all').classList.add('active');
+  $('inventory-tab-all').setAttribute('aria-selected', 'true');
+  $('inventory-bag-view').hidden = true;
+  $('inventory-all-view').hidden = false;
+  $('inventory-selected-name').textContent = weapon.name;
+  $('inventory-selected-weight').textContent = `${weapon.weight.toFixed(1)} кг`;
+  const ammoDescription = weapon.magazineSize === null
+    ? 'Без боеприпасов · ближний бой'
+    : `Магазин ${weapon.magazineSize} · запас ${weapon.reserve} патронов`;
+  const damageDescription = weapon.pellets ? `${weapon.pellets} дробин × ${weapon.damage} урона` : `${weapon.damage} урона за попадание`;
+  $('inventory-selected-description').textContent = `${weapon.description} ${damageDescription}. ${ammoDescription}.`;
+  const alreadyEquipped = currentWeaponId === id;
+  $('inventory-take').disabled = alreadyEquipped;
+  $('inventory-take').textContent = alreadyEquipped ? 'УЖЕ В РУКАХ' : 'ЭКИПИРОВАТЬ';
+  const ammo = weaponAmmo.get(id);
+  $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
+  for (const button of $('inventory-all-grid').querySelectorAll('.armory-item')) {
+    button.classList.toggle('selected', button.dataset.weaponId === id);
+    button.setAttribute('aria-pressed', String(button.dataset.weaponId === id));
+  }
+}
+
+function setInventoryTab(mode) {
+  inventoryMode = mode === 'all' ? 'all' : 'bag';
+  const inArmory = inventoryMode === 'all';
+  $('inventory-tab-bag').classList.toggle('active', !inArmory);
+  $('inventory-tab-bag').setAttribute('aria-selected', String(!inArmory));
+  $('inventory-tab-all').classList.toggle('active', inArmory);
+  $('inventory-tab-all').setAttribute('aria-selected', String(inArmory));
+  $('inventory-bag-view').hidden = inArmory;
+  $('inventory-all-view').hidden = !inArmory;
+  updateInventorySelection();
+}
+
 function updateInventorySelection() {
-  const item = inventoryItems.find((entry) => entry.id === selectedInventoryId);
   const takeButton = $('inventory-take');
+  if (inventoryMode === 'all') {
+    if (!WEAPON_BY_ID.has(selectedCatalogWeaponId)) selectedCatalogWeaponId = currentWeaponId;
+    const weapon = WEAPON_BY_ID.get(selectedCatalogWeaponId);
+    const ammo = weaponAmmo.get(weapon.id);
+    $('inventory-selected-name').textContent = weapon.name;
+    $('inventory-selected-weight').textContent = `${weapon.weight.toFixed(1)} кг`;
+    const ammoDescription = weapon.magazineSize === null ? 'Без боеприпасов · ближний бой' : `Магазин ${weapon.magazineSize} · запас ${weapon.reserve} патронов`;
+    const damageDescription = weapon.pellets ? `${weapon.pellets} дробин × ${weapon.damage} урона` : `${weapon.damage} урона за попадание`;
+    $('inventory-selected-description').textContent = `${weapon.description} ${damageDescription}. ${ammoDescription}.`;
+    const alreadyEquipped = currentWeaponId === weapon.id;
+    takeButton.disabled = alreadyEquipped;
+    takeButton.textContent = alreadyEquipped ? 'УЖЕ В РУКАХ' : 'ЭКИПИРОВАТЬ';
+    $('inventory-message').textContent = `${weapon.category.toUpperCase()} · ${weapon.magazineSize === null ? 'БЛИЖНИЙ БОЙ' : `${ammo.magazine} / ${ammo.reserve} ПАТРОНОВ`}`;
+    return;
+  }
+  const item = inventoryItems.find((entry) => entry.id === selectedInventoryId);
   if (!item) {
     selectedInventoryId = null;
     $('inventory-selected-name').textContent = 'ПРЕДМЕТ НЕ ВЫБРАН';
@@ -1877,6 +2310,7 @@ function updateInventorySelection() {
     $('inventory-selected-description').textContent = 'Нажмите на предмет в сетке, чтобы посмотреть его параметры.';
     takeButton.disabled = true;
     takeButton.textContent = 'ВЫБЕРИТЕ ПРЕДМЕТ';
+    $('inventory-message').textContent = inventoryItems.length ? 'Выберите предмет, чтобы увидеть его размеры и свойства.' : 'Предметы можно убрать сюда из рук.';
     return;
   }
   $('inventory-selected-name').textContent = item.meta.name;
@@ -1884,6 +2318,34 @@ function updateInventorySelection() {
   $('inventory-selected-description').textContent = item.meta.description || item.meta.detail || 'Предмет без дополнительных сведений.';
   takeButton.disabled = Boolean(heldBody);
   takeButton.textContent = heldBody ? 'СНАЧАЛА ПОЛОЖИТЕ ПРЕДМЕТ' : 'ДОСТАТЬ ПРЕДМЕТ';
+}
+
+function updateArmoryUI() {
+  const grid = $('inventory-all-grid');
+  grid.replaceChildren();
+  for (const weapon of WEAPON_CATALOG) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `armory-item${weapon.id === selectedCatalogWeaponId ? ' selected' : ''}`;
+    card.dataset.weaponId = weapon.id;
+    card.setAttribute('aria-pressed', String(weapon.id === selectedCatalogWeaponId));
+    card.title = `${weapon.name} · ${weapon.description}`;
+    const icon = document.createElement('span');
+    icon.className = `armory-item-icon ${weapon.type}`;
+    icon.textContent = weapon.type === 'melee' ? '⚔' : weapon.type === 'pistol' ? '▣' : weapon.type === 'shotgun' ? '◆' : '⌁';
+    const name = document.createElement('b');
+    name.className = 'armory-item-name';
+    name.textContent = weapon.name;
+    const category = document.createElement('small');
+    category.className = 'armory-item-category';
+    category.textContent = weapon.category.toUpperCase();
+    const stats = document.createElement('small');
+    stats.className = 'armory-item-stats';
+    stats.textContent = weapon.magazineSize === null ? `${weapon.damage} УРОН · ${weapon.range.toFixed(1)} М` : `${weapon.magazineSize} · ${weapon.damage}${weapon.pellets ? ` × ${weapon.pellets}` : ''}`;
+    card.append(icon, name, category, stats);
+    card.addEventListener('click', () => selectCatalogWeapon(weapon.id));
+    grid.appendChild(card);
+  }
 }
 
 function updateInventoryUI() {
@@ -1926,10 +2388,10 @@ function updateInventoryUI() {
   $('inventory-limit').textContent = INVENTORY_WEIGHT_LIMIT.toFixed(1);
   $('inventory-weight-bar').style.width = `${Math.min(100, total / INVENTORY_WEIGHT_LIMIT * 100)}%`;
   $('inventory-weight-bar').style.background = total / INVENTORY_WEIGHT_LIMIT > 0.82 ? '#d08353' : '#a4c17e';
-  $('inventory-empty').style.display = inventoryItems.length ? 'none' : 'flex';
-  $('inventory-message').textContent = inventoryItems.length ? 'Выберите предмет, чтобы увидеть его размеры и свойства.' : 'Предметы можно убрать сюда из рук.';
+  $('inventory-empty').style.display = inventoryMode === 'bag' && inventoryItems.length === 0 ? 'flex' : 'none';
   $('inventory-drop').disabled = !heldBody;
   $('inventory-stash').disabled = !heldBody;
+  updateArmoryUI();
   updateInventorySelection();
 }
 
@@ -2050,6 +2512,7 @@ function storeHeldInInventory() {
   updateInventoryUI();
   updateTargetUI();
   toast(`В РЮКЗАКЕ · ${meta.name}`, 1.0);
+  setInventoryTab('bag');
   setInventoryOpen(true);
 }
 
@@ -2292,6 +2755,7 @@ function animate(time) {
   updateCamera(dt);
   updateHandPose(dt);
   updateWeapon(dt);
+  updateBulletMarks(dt);
   updateHeld(dt);
   for (const record of physicsRecords) {
     const last = record.body.gameMeta?.lastVelocity;
@@ -2453,7 +2917,18 @@ $('menu-resume').addEventListener('click', () => setMenuOpen(false));
 $('menu-restart').addEventListener('click', () => window.location.reload());
 $('menu-overlay').addEventListener('click', (event) => { if (event.target === $('menu-overlay')) setMenuOpen(false); });
 $('inventory-close').addEventListener('click', () => setInventoryOpen(false));
-$('inventory-take').addEventListener('click', () => { if (selectedInventoryId) takeInventoryItem(selectedInventoryId); });
+$('inventory-take').addEventListener('click', () => {
+  if (inventoryMode === 'all') {
+    if (selectedCatalogWeaponId && selectedCatalogWeaponId !== currentWeaponId) {
+      equipWeapon(selectedCatalogWeaponId);
+      setInventoryOpen(false);
+    }
+    return;
+  }
+  if (selectedInventoryId) takeInventoryItem(selectedInventoryId);
+});
+$('inventory-tab-bag').addEventListener('click', () => setInventoryTab('bag'));
+$('inventory-tab-all').addEventListener('click', () => setInventoryTab('all'));
 $('inventory-drop').addEventListener('click', () => { if (heldBody) { dropHeld(); updateInventoryUI(); } });
 $('inventory-stash').addEventListener('click', () => storeHeldInInventory());
 $('inventory-overlay').addEventListener('click', (event) => { if (event.target === $('inventory-overlay')) setInventoryOpen(false); });

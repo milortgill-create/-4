@@ -72,7 +72,7 @@
       <button id="reload-button" class="reload-button" type="button" aria-label="Перезарядить" title="Перезарядить">↻</button>
       <button id="fire-button" class="fire-button" type="button" aria-label="Огонь">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h7l3-4h6v8h-6l-3-4M4 8v8M17 10v4"/></svg>
-        <span><b>ОГОНЬ</b><small id="ammo-count">30 / 90</small></span>
+        <span><b id="fire-label">ОГОНЬ</b><small id="ammo-count">30 / 90</small></span>
       </button>
     </div>
   </div>
@@ -94,10 +94,20 @@
           <div class="operator-caption"><span class="status-led"></span> СНАРЯЖЕНИЕ</div>
         </aside>
         <div class="inventory-grid-column">
-          <div class="inventory-column-heading"><span>РЮКЗАК</span><b>8 × 5</b></div>
-          <div class="inventory-grid-wrap">
-            <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
-            <div id="inventory-empty" class="inventory-empty">ПУСТО<br><small>ДОБАВЬТЕ ПРЕДМЕТ</small></div>
+          <div class="inventory-tabs" role="tablist" aria-label="Каталог предметов">
+            <button id="inventory-tab-bag" class="inventory-tab active" type="button" role="tab" aria-selected="true" aria-controls="inventory-bag-view">РЮКЗАК</button>
+            <button id="inventory-tab-all" class="inventory-tab" type="button" role="tab" aria-selected="false" aria-controls="inventory-all-view">ВСЕ ПРЕДМЕТЫ <small>9</small></button>
+          </div>
+          <div id="inventory-bag-view" class="inventory-view" role="tabpanel" aria-labelledby="inventory-tab-bag">
+            <div class="inventory-column-heading"><span>РЮКЗАК</span><b>8 × 5</b></div>
+            <div class="inventory-grid-wrap">
+              <div id="inventory-grid" class="inventory-grid" aria-label="Сетка рюкзака"></div>
+              <div id="inventory-empty" class="inventory-empty">ПУСТО<br><small>ДОБАВЬТЕ ПРЕДМЕТ</small></div>
+            </div>
+          </div>
+          <div id="inventory-all-view" class="inventory-view" role="tabpanel" aria-labelledby="inventory-tab-all" hidden>
+            <div class="inventory-column-heading"><span>АРСЕНАЛ · ТЕСТОВАЯ ПЕСКОЧНИЦА</span><b>9 ПОЗИЦИЙ</b></div>
+            <div id="inventory-all-grid" class="inventory-all-grid" aria-label="Все доступные предметы"></div>
           </div>
         </div>
         <aside class="inventory-side">
