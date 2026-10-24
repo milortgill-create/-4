@@ -13,6 +13,15 @@
   <div class="vignette"></div>
   <div class="scanlines"></div>
 
+  <nav class="corner-controls" aria-label="Меню и инвентарь">
+    <button id="menu-button" class="corner-button" type="button" aria-label="Меню" title="Меню">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>МЕНЮ</span>
+    </button>
+    <button id="inventory-button" class="corner-button" type="button" aria-label="Инвентарь" title="Рюкзак">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10l1.2 12H5.8L7 8Z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8M9 12v2m6-2v2"/></svg><span>ИНВЕНТАРЬ</span>
+    </button>
+  </nav>
+
   <section class="vitals-panel" aria-label="Здоровье и состояние тела">
     <svg class="injury-doll" id="injury-doll" viewBox="0 0 82 142" role="group" aria-label="Интерактивная схема травм">
       <circle id="injury-head" class="doll-part" cx="41" cy="14" r="9" role="button" tabindex="0" aria-label="Голова" />
@@ -52,11 +61,21 @@
     <div class="joystick-ring"><div id="joystick-knob" class="joystick-knob"><span></span></div></div>
   </div>
 
-  <button id="action-button" class="action-button" aria-label="Действие" aria-description="Коснитесь для действия. Удерживайте, чтобы открыть рюкзак.">
-    <span class="action-halo"></span>
-    <span class="action-icon" id="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
-    <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b></span>
-  </button>
+  <div class="aim-reticle" aria-hidden="true"><i></i><b></b><i></i></div>
+  <div class="combat-controls" aria-label="Оружие и действие">
+    <button id="action-button" class="action-button" type="button" aria-label="Действие" aria-description="Коснитесь для действия. Удерживайте, чтобы открыть рюкзак.">
+      <span class="action-halo"></span>
+      <span class="action-icon" id="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 12.5 11.5 16 20 7.5M4 12.5l3 3"/></svg></span>
+      <span class="action-copy"><b id="action-label">ДЕЙСТВИЕ</b></span>
+    </button>
+    <div class="weapon-controls">
+      <button id="reload-button" class="reload-button" type="button" aria-label="Перезарядить" title="Перезарядить">↻</button>
+      <button id="fire-button" class="fire-button" type="button" aria-label="Огонь">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h7l3-4h6v8h-6l-3-4M4 8v8M17 10v4"/></svg>
+        <span><b>ОГОНЬ</b><small id="ammo-count">30 / 90</small></span>
+      </button>
+    </div>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <div id="inventory-overlay" class="inventory-overlay" aria-hidden="true">
@@ -99,6 +118,15 @@
         </aside>
       </div>
       <footer class="inventory-footer"><span>×</span><i></i><span>ЗАКРЫТЬ</span></footer>
+    </section>
+  </div>
+
+  <div id="menu-overlay" class="menu-overlay" aria-hidden="true">
+    <section class="menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+      <span class="menu-kicker">ИГРА ПРИОСТАНОВЛЕНА</span>
+      <h2 id="menu-title">МЕНЮ</h2>
+      <button id="menu-resume" class="menu-resume" type="button">ПРОДОЛЖИТЬ</button>
+      <button id="menu-restart" class="menu-restart" type="button">НАЧАТЬ ЗАНОВО</button>
     </section>
   </div>
 

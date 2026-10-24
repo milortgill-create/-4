@@ -6,6 +6,42 @@ import * as THREE from 'three';
 
 // Evaluate the game's actual controller functions without booting WebGL or a browser DOM.
 const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+assert.doesNotMatch(source, /playerBody\.addEventListener\(['"]collide/, 'ordinary prop/NPC contacts must not be wired to player damage');
+const fallStart = source.indexOf('function resetPlayerFallTracking()');
+const fallEnd = source.indexOf('\nfunction keepPlayerInBounds()', fallStart);
+assert.ok(fallStart >= 0 && fallEnd > fallStart, 'fall damage controller source markers must exist');
+const fallEvents = [];
+const fallSandbox = {
+  playerFallArmed: false,
+  playerFallPeakY: 0.87,
+  playerMaxFallSpeed: 0,
+  playerPreviousVerticalVelocity: 0,
+  playerStart: { y: 0.87 },
+  playerBody: { position: { y: 0.87 }, velocity: { y: 0 } },
+  dead: false,
+  menuOpen: false,
+  inventoryOpen: false,
+  receiveDamage: (amount, part) => fallEvents.push({ amount, part })
+};
+runInNewContext(`${source.slice(fallStart, fallEnd)}\nglobalThis.updateFallForTest = updatePlayerFallDamage;`, fallSandbox);
+fallSandbox.playerBody.position.y = 1.12;
+fallSandbox.playerBody.velocity.y = 0.2;
+fallSandbox.updateFallForTest();
+fallSandbox.playerBody.velocity.y = 0;
+fallSandbox.updateFallForTest();
+assert.equal(fallEvents.length, 0, 'ordinary contact/bump near a crate must not cause damage');
+fallSandbox.playerBody.position.y = 3.9;
+fallSandbox.playerBody.velocity.y = -6;
+fallSandbox.updateFallForTest();
+fallSandbox.playerBody.position.y = 1.4;
+fallSandbox.playerBody.velocity.y = -5.8;
+fallSandbox.updateFallForTest();
+fallSandbox.playerBody.position.y = 0.87;
+fallSandbox.playerBody.velocity.y = 0;
+fallSandbox.updateFallForTest();
+assert.equal(fallEvents.length, 1, 'a hard landing from height must cause one damage event');
+assert.ok(fallEvents[0].amount > 0 && fallEvents[0].part === 'leg-left', 'fall damage should target a leg');
+
 const start = source.indexOf('const MANNEQUIN_KNEELING_POSE =');
 const end = source.indexOf('\nconst playerStart =', start);
 assert.ok(start >= 0 && end > start, 'mannequin controller source markers must exist');
@@ -119,4 +155,4 @@ for (const { id, behavior } of [
   }
 }
 
-console.log('mannequin behavior OK: physical fall, kneeling recovery, standing, peaceful retreat and aggressive pursuit/punch');
+console.log('damage behavior OK: crate-contact safe, high-fall damage only; mannequin behavior OK: physical fall, kneeling recovery, standing, peaceful retreat and aggressive pursuit/punch');

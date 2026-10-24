@@ -1079,12 +1079,10 @@ playerBody.addShape(new CANNON.Sphere(0.31), new CANNON.Vec3(0, 0.53, 0));
 playerBody.addShape(new CANNON.Sphere(0.31), new CANNON.Vec3(0, -0.53, 0));
 playerBody.gameMeta = { kind: 'player' };
 world.addBody(playerBody);
-playerBody.addEventListener('collide', (event) => {
-  const body = event.body;
-  if (!body?.gameMeta || !['prop', 'mannequin'].includes(body.gameMeta.kind)) return;
-  const impact = event.contact ? Math.abs(event.contact.getImpactVelocityAlongNormal()) : body.velocity.length();
-  if (impact > 3.5) receiveDamage(Math.min(15, Math.round(impact * 1.45)), classifyPlayerHit(event.contact));
-});
+let playerFallArmed = false;
+let playerFallPeakY = playerStart.y;
+let playerMaxFallSpeed = 0;
+let playerPreviousVerticalVelocity = 0;
 
 const handGroup = new THREE.Group();
 camera.add(handGroup);
@@ -1093,10 +1091,36 @@ const cuffMat = new THREE.MeshStandardMaterial({ color: 0x252e29, roughness: 0.7
 const gloveMat = new THREE.MeshStandardMaterial({ color: 0x39443a, roughness: 0.91, metalness: 0.01 });
 const gloveEdge = new THREE.MeshStandardMaterial({ color: 0x202921, roughness: 0.84, metalness: 0.03 });
 const glovePad = new THREE.MeshStandardMaterial({ color: 0x56624e, roughness: 0.88, metalness: 0.02 });
+const weaponSteel = new THREE.MeshStandardMaterial({ color: 0x293238, roughness: 0.46, metalness: 0.68 });
+const weaponBlack = new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.62, metalness: 0.42 });
+const weaponPolymer = new THREE.MeshStandardMaterial({ color: 0x333a37, roughness: 0.82, metalness: 0.08 });
+const weaponWood = new THREE.MeshStandardMaterial({ color: 0x725035, roughness: 0.84, metalness: 0.02 });
+const weaponWoodEdge = new THREE.MeshStandardMaterial({ color: 0x4c3726, roughness: 0.9, metalness: 0.01 });
+const weaponGlass = new THREE.MeshStandardMaterial({ color: 0x5186b2, roughness: 0.23, metalness: 0.26, emissive: 0x10233a, emissiveIntensity: 0.2 });
+const weaponView = new THREE.Group();
+handGroup.add(weaponView);
+const weaponBasePosition = new THREE.Vector3(0.28, -0.33, -0.78);
+const weaponBaseRotation = new THREE.Euler(0.25, 0.25, 0.015, 'XYZ');
+weaponView.position.copy(weaponBasePosition);
+weaponView.rotation.copy(weaponBaseRotation);
+const weaponHands = {};
+const magazineGroup = new THREE.Group();
+const magazineBasePosition = new THREE.Vector3(0, -0.145, 0.035);
+const muzzleFlash = new THREE.Group();
+let muzzleFlashTimer = 0;
+let weaponRecoil = 0;
+let reloadTimer = 0;
+let reloadProgress = 0;
+let fireCooldown = 0;
+let fireHeld = false;
+let magazineAmmo = 30;
+let reserveAmmo = 90;
+const MAGAZINE_CAPACITY = 30;
+const RELOAD_DURATION = 1.25;
 const fingerRigs = [];
 let handPose = 0;
 let handTargetPose = 0;
-function setHandPose(value) { handTargetPose = value; }
+function setHandPose(value) { handTargetPose = heldBody ? value : 0.78; }
 function block(geometry, material, position, rotationZ = 0) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(position[0], position[1], position[2]);
@@ -1105,6 +1129,103 @@ function block(geometry, material, position, rotationZ = 0) {
   mesh.receiveShadow = false;
   return mesh;
 }
+function weaponBox(parent, size, position, material, rotation = [0, 0, 0]) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  parent.add(mesh);
+  return mesh;
+}
+function weaponCylinder(parent, radius, length, position, material, segments = 12) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, segments, 1), material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  parent.add(mesh);
+  return mesh;
+}
+function buildRifle() {
+  // Low-poly AK-style first-person rifle. Its bore is converged onto the screen-center sight.
+  weaponBox(weaponView, [0.205, 0.145, 0.46], [0, 0.005, 0.035], weaponSteel);
+  weaponBox(weaponView, [0.184, 0.036, 0.43], [0, 0.095, 0.025], weaponBlack);
+  weaponBox(weaponView, [0.045, 0.025, 0.47], [0, 0.132, -0.02], weaponSteel);
+  weaponBox(weaponView, [0.11, 0.02, 0.11], [0, 0.158, -0.15], weaponBlack);
+  weaponBox(weaponView, [0.018, 0.026, 0.16], [0.112, 0.025, 0.035], weaponBlack);
+  weaponBox(weaponView, [0.055, 0.036, 0.13], [0.112, 0.026, -0.03], weaponSteel);
+  weaponBox(weaponView, [0.065, 0.025, 0.10], [-0.113, 0.025, 0.105], weaponBlack);
+  weaponBox(weaponView, [0.06, 0.025, 0.10], [-0.12, -0.005, 0.16], weaponSteel);
+
+  // Barrel, front sight and muzzle brake.
+  weaponCylinder(weaponView, 0.033, 0.76, [0, 0.025, -0.575], weaponSteel, 10);
+  weaponCylinder(weaponView, 0.046, 0.13, [0, 0.025, -1.015], weaponBlack, 10);
+  weaponBox(weaponView, [0.085, 0.065, 0.08], [0, 0.115, -0.88], weaponSteel);
+  weaponBox(weaponView, [0.018, 0.075, 0.025], [0, 0.18, -0.91], weaponBlack);
+  weaponBox(weaponView, [0.13, 0.025, 0.045], [0, 0.153, -0.90], weaponSteel);
+  for (const side of [-1, 1]) weaponBox(weaponView, [0.012, 0.028, 0.045], [side * 0.043, 0.026, -1.015], weaponSteel);
+
+  // Ribbed wooden handguard and its side rails.
+  weaponBox(weaponView, [0.17, 0.095, 0.36], [0, -0.045, -0.39], weaponWood);
+  weaponBox(weaponView, [0.178, 0.016, 0.31], [0, 0.014, -0.39], weaponWoodEdge);
+  for (const side of [-1, 1]) {
+    weaponBox(weaponView, [0.014, 0.022, 0.31], [side * 0.09, -0.045, -0.39], weaponSteel);
+    for (let rib = 0; rib < 7; rib++) {
+      const z = -0.52 + rib * 0.043;
+      weaponBox(weaponView, [0.009, 0.013, 0.018], [side * 0.101, -0.045, z], weaponBlack);
+    }
+  }
+  weaponBox(weaponView, [0.055, 0.035, 0.44], [0, 0.118, -0.39], weaponBlack);
+
+  // Rear sight, optic rails and a small blue-tinted low-poly optic like the reference.
+  weaponBox(weaponView, [0.11, 0.06, 0.08], [0, 0.16, -0.105], weaponSteel);
+  weaponBox(weaponView, [0.045, 0.047, 0.028], [0, 0.195, -0.115], weaponBlack);
+  const optic = new THREE.Group();
+  optic.position.set(0, 0.226, -0.17);
+  weaponView.add(optic);
+  weaponCylinder(optic, 0.063, 0.28, [0, 0, -0.015], weaponBlack, 8);
+  weaponCylinder(optic, 0.073, 0.055, [0, 0, 0.105], weaponSteel, 8);
+  weaponCylinder(optic, 0.073, 0.04, [0, 0, -0.155], weaponSteel, 8);
+  const opticGlass = new THREE.Mesh(new THREE.CircleGeometry(0.053, 8), weaponGlass);
+  opticGlass.position.z = 0.135;
+  optic.add(opticGlass);
+  const opticShade = new THREE.Mesh(new THREE.CircleGeometry(0.047, 8), weaponGlass);
+  opticShade.position.z = -0.177;
+  opticShade.rotation.y = Math.PI;
+  optic.add(opticShade);
+  weaponBox(weaponView, [0.11, 0.025, 0.22], [0, 0.178, -0.17], weaponSteel);
+
+  // Pistol grip, trigger guard, curved magazine and stock.
+  weaponBox(weaponView, [0.088, 0.22, 0.115], [0.012, -0.17, 0.165], weaponPolymer, [-0.18, 0, -0.04]);
+  const triggerGuard = new THREE.Mesh(new THREE.TorusGeometry(0.061, 0.009, 5, 12), weaponSteel);
+  triggerGuard.position.set(0, -0.105, 0.075);
+  weaponView.add(triggerGuard);
+  weaponBox(weaponView, [0.018, 0.09, 0.022], [0.015, -0.10, 0.045], weaponBlack, [0.22, 0, 0]);
+  magazineGroup.position.copy(magazineBasePosition);
+  weaponView.add(magazineGroup);
+  weaponBox(magazineGroup, [0.11, 0.26, 0.17], [0, -0.13, 0], weaponPolymer, [-0.12, 0, 0]);
+  weaponBox(magazineGroup, [0.116, 0.035, 0.175], [0, -0.252, -0.01], weaponBlack, [-0.12, 0, 0]);
+  for (let rib = 0; rib < 4; rib++) weaponBox(magazineGroup, [0.115, 0.012, 0.18], [0, -0.06 - rib * 0.045, 0], weaponSteel, [-0.12, 0, 0]);
+  weaponBox(weaponView, [0.105, 0.105, 0.44], [0, 0.015, 0.445], weaponPolymer);
+  weaponBox(weaponView, [0.13, 0.12, 0.045], [0, 0.005, 0.67], weaponBlack);
+  weaponBox(weaponView, [0.09, 0.045, 0.24], [0, 0.078, 0.42], weaponSteel);
+  weaponBox(weaponView, [0.18, 0.012, 0.12], [0, -0.048, 0.57], weaponBlack);
+
+  muzzleFlash.position.set(0, 0.025, -1.09);
+  const flashCone = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.19, 6), new THREE.MeshBasicMaterial({ color: 0xffbd68, transparent: true, opacity: 0.92 }));
+  flashCone.rotation.x = -Math.PI / 2;
+  flashCone.position.z = -0.075;
+  muzzleFlash.add(flashCone);
+  const flashCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.055, 0), new THREE.MeshBasicMaterial({ color: 0xfff0b0 }));
+  muzzleFlash.add(flashCore);
+  const flashLight = new THREE.PointLight(0xffa743, 0, 2.2, 2);
+  muzzleFlash.add(flashLight);
+  muzzleFlash.userData.light = flashLight;
+  muzzleFlash.visible = false;
+  weaponView.add(muzzleFlash);
+}
+buildRifle();
 function buildHand(side) {
   const group = new THREE.Group();
   const mirrored = side < 0 ? -1 : 1;
@@ -1153,12 +1274,15 @@ function buildHand(side) {
   thumbTip.add(block(new THREE.BoxGeometry(0.052, 0.067, 0.072), glovePad, [0, 0.031, -0.002]));
   fingerRigs.push({ base: thumb, distal: thumbTip, fan: 0.54, side: mirrored, thumb: true });
 
-  group.position.set(side * 0.39, -0.64, -0.77);
-  group.rotation.z = -side * 0.05;
-  handGroup.add(group);
+  const palmTarget = side < 0 ? [-0.09, -0.015, -0.39] : [0.07, -0.105, 0.17];
+  group.position.set(palmTarget[0] - mirrored * 0.15, palmTarget[1] - 0.285, palmTarget[2] + 0.025);
+  group.rotation.set(side < 0 ? 0.08 : -0.06, 0, -side * 0.05);
+  weaponView.add(group);
+  weaponHands[side < 0 ? 'left' : 'right'] = group;
 }
 buildHand(-1);
 buildHand(1);
+handPose = handTargetPose = 0.78;
 function updateHandPose(dt) {
   handPose = THREE.MathUtils.damp(handPose, handTargetPose, 13, dt);
   for (const rig of fingerRigs) {
@@ -1172,6 +1296,132 @@ function updateHandPose(dt) {
       rig.distal.rotation.x = -handPose * 1.28;
     }
   }
+}
+
+function updateAmmoHUD() {
+  const label = $('ammo-count');
+  if (label) label.textContent = `${magazineAmmo} / ${reserveAmmo}`;
+  const fireButton = $('fire-button');
+  if (fireButton) fireButton.disabled = magazineAmmo <= 0 && reserveAmmo <= 0;
+}
+
+function startReload() {
+  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0) return;
+  if (magazineAmmo >= MAGAZINE_CAPACITY) { toast('МАГАЗИН ПОЛОН', 0.85); return; }
+  if (reserveAmmo <= 0) { toast('НЕТ ПАТРОНОВ', 0.9); return; }
+  fireHeld = false;
+  reloadTimer = RELOAD_DURATION;
+  reloadProgress = 0;
+  weaponRecoil = 0;
+  toast('ПЕРЕЗАРЯДКА', 0.8);
+}
+
+function completeReload() {
+  const needed = MAGAZINE_CAPACITY - magazineAmmo;
+  const loaded = Math.min(needed, reserveAmmo);
+  magazineAmmo += loaded;
+  reserveAmmo -= loaded;
+  reloadProgress = 1;
+  updateAmmoHUD();
+  toast('ГОТОВО', 0.65);
+}
+
+function applyWeaponHit(meta, direction) {
+  if (!meta || meta.isStored || meta.isHeld) return;
+  if (meta.kind === 'mannequin' && meta.human) {
+    const human = meta.human;
+    const part = human.partMap[meta.key] || human.partMap.torso;
+    if (!human.active) {
+      activateMannequin(human, part, 32, new CANNON.Vec3(direction.x, direction.y, direction.z), false);
+      return;
+    }
+    if (human.state !== 'falling') {
+      human.state = 'falling';
+      human.stateTime = 0;
+      human.quietTime = 0;
+      for (const ragdollPart of human.parts) {
+        ragdollPart.body.type = CANNON.Body.DYNAMIC;
+        ragdollPart.body.mass = ragdollPart.mass;
+        ragdollPart.body.updateMassProperties();
+        ragdollPart.body.wakeUp();
+      }
+      world.broadphase.dirty = true;
+    }
+    if (part.body.type === CANNON.Body.DYNAMIC) {
+      part.body.applyImpulse(new CANNON.Vec3(direction.x * 11, direction.y * 11, direction.z * 11), new CANNON.Vec3());
+    }
+    return;
+  }
+  if (meta.kind === 'prop' && meta.body && meta.body.type === CANNON.Body.DYNAMIC) {
+    meta.body.applyImpulse(new CANNON.Vec3(direction.x * 2.4, direction.y * 2.4, direction.z * 2.4), new CANNON.Vec3());
+    meta.body.wakeUp();
+  }
+}
+
+function fireWeapon() {
+  if (dead || menuOpen || inventoryOpen || heldBody || reloadTimer > 0 || fireCooldown > 0) return;
+  if (magazineAmmo <= 0) {
+    startReload();
+    return;
+  }
+  magazineAmmo--;
+  updateAmmoHUD();
+  fireCooldown = 0.135;
+  weaponRecoil = 1;
+  shakeAmount = Math.min(0.5, shakeAmount + 0.13);
+  pitch = THREE.MathUtils.clamp(pitch + 0.012, -1.18, 1.18);
+  muzzleFlashTimer = 0.075;
+  muzzleFlash.visible = true;
+  muzzleFlash.userData.light.intensity = 3.2;
+  makeCameraDirection();
+  weaponRaycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const hits = weaponRaycaster.intersectObjects(raycastTargets, true);
+  for (const hit of hits) {
+    const meta = hit.object.userData.gameMeta || hit.object.parent?.userData?.gameMeta;
+    if (!meta || meta.isHeld || meta.isStored) continue;
+    applyWeaponHit(meta, lookVector);
+    break;
+  }
+}
+
+const weaponRaycaster = new THREE.Raycaster();
+weaponRaycaster.far = 42;
+
+function updateWeapon(dt) {
+  fireCooldown = Math.max(0, fireCooldown - dt);
+  weaponRecoil = THREE.MathUtils.damp(weaponRecoil, 0, 18, dt);
+  if (fireHeld && fireCooldown <= 0 && reloadTimer <= 0) fireWeapon();
+  if (reloadTimer > 0) {
+    reloadTimer = Math.max(0, reloadTimer - dt);
+    reloadProgress = 1 - reloadTimer / RELOAD_DURATION;
+    if (reloadTimer === 0) completeReload();
+  }
+  if (muzzleFlashTimer > 0) {
+    muzzleFlashTimer = Math.max(0, muzzleFlashTimer - dt);
+    if (muzzleFlashTimer === 0) {
+      muzzleFlash.visible = false;
+      muzzleFlash.userData.light.intensity = 0;
+    }
+  }
+  const reloadMotion = reloadTimer > 0 ? Math.sin(reloadProgress * Math.PI) : 0;
+  weaponView.position.set(
+    weaponBasePosition.x,
+    weaponBasePosition.y - weaponRecoil * 0.035 - reloadMotion * 0.07,
+    weaponBasePosition.z + weaponRecoil * 0.065
+  );
+  weaponView.rotation.set(
+    weaponBaseRotation.x + weaponRecoil * 0.11 - reloadMotion * 0.08,
+    weaponBaseRotation.y,
+    weaponBaseRotation.z + reloadMotion * 0.07
+  );
+  magazineGroup.position.set(magazineBasePosition.x, magazineBasePosition.y - reloadMotion * 0.18, magazineBasePosition.z + reloadMotion * 0.035);
+  magazineGroup.rotation.x = -reloadMotion * 0.24;
+  if (weaponHands.left) {
+    weaponHands.left.position.y = -0.30 - reloadMotion * 0.11;
+    weaponHands.left.position.z = -0.355 + reloadMotion * 0.12;
+    weaponHands.left.rotation.x = 0.08 - reloadMotion * 0.22;
+  }
+  weaponView.visible = !dead && !heldBody;
 }
 
 // Separate low-poly operator preview for the inventory screen. The model is original and uses block-based geometry.
@@ -1247,14 +1497,13 @@ let damageCooldown = 0;
 let health = 100;
 let hunger = 100;
 let thirst = 100;
-let needsDamageTimer = 0;
-let bleedDamageTimer = 0;
 let needsHudTimer = 0;
 let dead = false;
 let deathTimer = 0;
 let pendingDeathRelease = false;
 let selectedBodyPart = null;
 let inventoryOpen = false;
+let menuOpen = false;
 let inventoryItems = [];
 let selectedInventoryId = null;
 let inventorySequence = 0;
@@ -1324,17 +1573,6 @@ function updateInjuryStatus(part) {
   $('injury-status').classList.toggle('alert', severity > 0 || isBleeding);
 }
 
-function classifyPlayerHit(contact) {
-  if (!contact) return 'torso';
-  const offset = contact.bi === playerBody ? contact.ri : contact.rj;
-  if (!offset) return 'torso';
-  if (offset.y > 0.7) return 'head';
-  if (offset.y > 0.36) return 'neck';
-  if (offset.y < -0.25) return offset.x < 0 ? 'leg-left' : 'leg-right';
-  if (Math.abs(offset.x) > 0.2) return offset.x < 0 ? 'arm-left' : 'arm-right';
-  return 'torso';
-}
-
 function applyBodyInjury(part, amount) {
   const id = injuryElementIds[part] ? part : 'torso';
   const element = $(injuryElementIds[id]);
@@ -1363,6 +1601,8 @@ function selectBodyPart(part) {
 function triggerDeath(reason = 'КРИТИЧЕСКОЕ ПОВРЕЖДЕНИЕ') {
   if (dead) return;
   if (inventoryOpen) setInventoryOpen(false);
+  if (menuOpen) setMenuOpen(false);
+  fireHeld = false;
   pendingDeathRelease = Boolean(heldBody);
   dead = true;
   deathTimer = 0;
@@ -1404,7 +1644,7 @@ function receiveDamage(amount, part = 'torso') {
 }
 
 function updateNeeds(dt) {
-  if (!started || inventoryOpen || dead) return;
+  if (!started || inventoryOpen || menuOpen || dead) return;
   hunger = Math.max(0, hunger - dt * 0.045);
   thirst = Math.max(0, thirst - dt * 0.065);
   needsHudTimer += dt;
@@ -1412,32 +1652,15 @@ function updateNeeds(dt) {
     needsHudTimer = 0;
     updateNeedsHUD();
   }
-  if (hunger <= 0 || thirst <= 0) {
-    needsDamageTimer += dt;
-    if (needsDamageTimer >= 6) {
-      needsDamageTimer = 0;
-      receiveDamage(hunger <= 0 && thirst <= 0 ? 2 : 1, 'torso');
-    }
-  } else {
-    needsDamageTimer = 0;
-  }
-  if (bleedingParts.size) {
-    bleedDamageTimer += dt;
-    if (bleedDamageTimer >= 5) {
-      bleedDamageTimer = 0;
-      const bleedingPart = [...bleedingParts].sort((a, b) => injuryLevels[b] - injuryLevels[a])[0];
-      receiveDamage(1, bleedingPart);
-    }
-  } else {
-    bleedDamageTimer = 0;
-  }
+  // Hunger, thirst and wound indicators remain informational; only explicit
+  // falls, NPC strikes and weapon hits reduce health.
 }
 
 function activateMannequin(human, hitPart = human.partMap.torso, impact = 0, incomingVelocity = null, manual = false) {
   if (human.active) {
     if (manual && hitPart?.body) {
       const impulse = new CANNON.Vec3(lookVector.x * 8.5, Math.max(1.0, lookVector.y * 8.5), lookVector.z * 8.5);
-      hitPart.body.applyImpulse(impulse, hitPart.body.position);
+      hitPart.body.applyImpulse(impulse, new CANNON.Vec3());
       toast('ИМПУЛЬС ПЕРЕДАН', 0.85);
     }
     return;
@@ -1460,7 +1683,7 @@ function activateMannequin(human, hitPart = human.partMap.torso, impact = 0, inc
       direction = new CANNON.Vec3(lookVector.x, Math.max(0.08, lookVector.y), lookVector.z);
       direction.normalize();
       const impulse = direction.scale(13.5);
-      hitPart.body.applyImpulse(impulse, hitPart.body.position);
+      hitPart.body.applyImpulse(impulse, new CANNON.Vec3());
     } else {
       direction = incomingVelocity && incomingVelocity.lengthSquared() > 0.08 ? incomingVelocity.clone() : new CANNON.Vec3(0, 0, 1);
       const speed = direction.length();
@@ -1748,16 +1971,38 @@ function renderInventoryPreview(dt) {
 }
 
 function setInventoryOpen(open) {
-  if (open && (!started || dead)) return;
+  if (open && (!started || dead || menuOpen)) return;
   inventoryOpen = open;
   const overlay = $('inventory-overlay');
   overlay.classList.toggle('open', open);
   overlay.setAttribute('aria-hidden', String(!open));
   if (open) {
+    fireHeld = false;
+    firePointerId = null;
     resetJoystick();
     if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
     updateInventoryUI();
     resizeInventoryPreview();
+  } else {
+    keys.clear();
+  }
+}
+
+function setMenuOpen(open) {
+  if (open && (!started || dead)) return;
+  if (open && inventoryOpen) setInventoryOpen(false);
+  menuOpen = open;
+  const overlay = $('menu-overlay');
+  overlay.classList.toggle('open', open);
+  overlay.setAttribute('aria-hidden', String(!open));
+  if (open) {
+    fireHeld = false;
+    firePointerId = null;
+    resetJoystick();
+    keys.clear();
+    toastTimer = 0;
+    $('toast').classList.remove('visible');
+    if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
   } else {
     keys.clear();
   }
@@ -1837,7 +2082,7 @@ function takeInventoryItem(id) {
 }
 
 function doAction() {
-  if (dead || !started || inventoryOpen) return;
+  if (dead || !started || inventoryOpen || menuOpen) return;
   if (heldBody) { throwHeld(); return; }
   const target = currentTarget || getTargetMeta();
   if (!target) {
@@ -1881,7 +2126,7 @@ function updateHeld(dt) {
 }
 
 function isMovementKeyDown() {
-  return !inventoryOpen && !dead && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12);
+  return !inventoryOpen && !menuOpen && !dead && (keys.has('KeyW') || keys.has('KeyA') || keys.has('KeyS') || keys.has('KeyD') || Math.abs(joystick.x) + Math.abs(joystick.y) > 0.12);
 }
 
 function updatePlayer(dt) {
@@ -1932,11 +2177,41 @@ function updateCamera(dt) {
   handGroup.position.x = moving ? Math.sin(walkPhase) * 0.008 : 0;
 }
 
+function resetPlayerFallTracking() {
+  playerFallArmed = false;
+  playerFallPeakY = playerStart.y;
+  playerMaxFallSpeed = 0;
+}
+
+function resolvePlayerFallDamage() {
+  if (!playerFallArmed) return;
+  const drop = playerFallPeakY - playerStart.y;
+  const impactSpeed = playerMaxFallSpeed;
+  resetPlayerFallTracking();
+  if (drop < 2.4 || impactSpeed < 5.2) return;
+  const amount = Math.min(65, Math.round(10 + (drop - 2.4) * 14 + (impactSpeed - 5.2) * 3));
+  receiveDamage(amount, 'leg-left');
+}
+
+function updatePlayerFallDamage() {
+  if (dead || menuOpen || inventoryOpen) return;
+  const y = playerBody.position.y;
+  const verticalSpeed = playerBody.velocity.y;
+  if (verticalSpeed < -1.2 && y > playerStart.y + 0.4) {
+    playerFallArmed = true;
+    playerFallPeakY = Math.max(playerFallPeakY, y);
+    playerMaxFallSpeed = Math.max(playerMaxFallSpeed, -verticalSpeed);
+  }
+  if (playerFallArmed && playerPreviousVerticalVelocity < -1.2 && verticalSpeed > -0.45) resolvePlayerFallDamage();
+  playerPreviousVerticalVelocity = verticalSpeed;
+}
+
 function keepPlayerInBounds() {
   if (dead) return;
   const safeX = 8.45;
   const safeZ = 6.45;
   if (![playerBody.position.x, playerBody.position.y, playerBody.position.z].every(Number.isFinite) || playerBody.position.y < 0.48) {
+    resolvePlayerFallDamage();
     playerBody.position.copy(playerStart);
     playerBody.previousPosition.copy(playerStart);
     playerBody.interpolatedPosition.copy(playerStart);
@@ -1945,7 +2220,7 @@ function keepPlayerInBounds() {
     playerBody.aabbNeedsUpdate = true;
     world.broadphase.dirty = true;
     playerBody.wakeUp();
-    receiveDamage(18, 'leg-left');
+    resetPlayerFallTracking();
     toast('ВОЗВРАТ В СЕКТОР · ПАДЕНИЕ', 1.4);
     return;
   }
@@ -2009,9 +2284,14 @@ function animate(time) {
     toastTimer -= dt;
     if (toastTimer <= 0) $('toast').classList.remove('visible');
   }
+  if (menuOpen) {
+    renderer.render(scene, camera);
+    return;
+  }
   updatePlayer(dt);
   updateCamera(dt);
   updateHandPose(dt);
+  updateWeapon(dt);
   updateHeld(dt);
   for (const record of physicsRecords) {
     const last = record.body.gameMeta?.lastVelocity;
@@ -2023,6 +2303,7 @@ function animate(time) {
   }
   updateMannequinAI(dt);
   world.step(1 / 60, dt, 4);
+  updatePlayerFallDamage();
   if (pendingDeathRelease) {
     releaseHeldAfterDeath();
     pendingDeathRelease = false;
@@ -2071,7 +2352,7 @@ function resetJoystick() {
   joystickKnob.style.transform = 'translate(0px, 0px)';
 }
 joystickRoot.addEventListener('pointerdown', (event) => {
-  if (!started || dead) return;
+  if (!started || dead || menuOpen || inventoryOpen) return;
   event.preventDefault();
   joystick.pointerId = event.pointerId;
   joystickRoot.setPointerCapture(event.pointerId);
@@ -2084,7 +2365,7 @@ joystickRoot.addEventListener('pointerup', (event) => { if (event.pointerId === 
 joystickRoot.addEventListener('pointercancel', resetJoystick);
 
 function beginLook(event) {
-  if (!started || dead || inventoryOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
+  if (!started || dead || inventoryOpen || menuOpen || event.pointerType === 'touch' && event.clientX < window.innerWidth * 0.4) return;
   if (event.target.closest('button, #joystick, .vitals-panel')) return;
   if (event.pointerType === 'mouse' && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
     try { canvas.requestPointerLock(); } catch (_) { /* Non-essential for browser testing. */ }
@@ -2122,7 +2403,7 @@ function clearActionLongPress() {
 actionButton.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   event.stopPropagation();
-  if (dead || inventoryOpen) return;
+  if (dead || inventoryOpen || menuOpen) return;
   actionPointerId = event.pointerId;
   actionLongPressTriggered = false;
   try { actionButton.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is optional. */ }
@@ -2144,6 +2425,33 @@ actionButton.addEventListener('pointerup', (event) => {
 });
 actionButton.addEventListener('pointercancel', clearActionLongPress);
 actionButton.addEventListener('contextmenu', (event) => event.preventDefault());
+
+const fireButton = $('fire-button');
+let firePointerId = null;
+function stopFirePointer(event) {
+  if (firePointerId !== null && event.pointerId !== undefined && event.pointerId !== firePointerId) return;
+  firePointerId = null;
+  fireHeld = false;
+}
+fireButton.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (dead || menuOpen || inventoryOpen) return;
+  firePointerId = event.pointerId;
+  fireHeld = true;
+  try { fireButton.setPointerCapture(event.pointerId); } catch (_) { /* Optional on older WebViews. */ }
+  fireWeapon();
+});
+fireButton.addEventListener('pointerup', stopFirePointer);
+fireButton.addEventListener('pointercancel', stopFirePointer);
+fireButton.addEventListener('lostpointercapture', stopFirePointer);
+fireButton.addEventListener('contextmenu', (event) => event.preventDefault());
+$('reload-button').addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); startReload(); });
+$('menu-button').addEventListener('click', () => setMenuOpen(!menuOpen));
+$('inventory-button').addEventListener('click', () => setInventoryOpen(!inventoryOpen));
+$('menu-resume').addEventListener('click', () => setMenuOpen(false));
+$('menu-restart').addEventListener('click', () => window.location.reload());
+$('menu-overlay').addEventListener('click', (event) => { if (event.target === $('menu-overlay')) setMenuOpen(false); });
 $('inventory-close').addEventListener('click', () => setInventoryOpen(false));
 $('inventory-take').addEventListener('click', () => { if (selectedInventoryId) takeInventoryItem(selectedInventoryId); });
 $('inventory-drop').addEventListener('click', () => { if (heldBody) { dropHeld(); updateInventoryUI(); } });
@@ -2165,6 +2473,10 @@ $('injury-doll').addEventListener('keydown', (event) => {
   selectBodyPart(target.id.replace('injury-', ''));
 });
 document.addEventListener('keydown', (event) => {
+  if (menuOpen) {
+    if (event.code === 'Escape' || event.code === 'Enter') { event.preventDefault(); setMenuOpen(false); }
+    return;
+  }
   if (dead) {
     if (event.code === 'KeyR') { event.preventDefault(); window.location.reload(); return; }
     if (!event.target.closest?.('button')) event.preventDefault();
@@ -2175,19 +2487,29 @@ document.addEventListener('keydown', (event) => {
     if (started) setInventoryOpen(!inventoryOpen);
     return;
   }
-  if (event.code === 'Escape' && inventoryOpen) {
+  if (event.code === 'Escape') {
     event.preventDefault();
-    setInventoryOpen(false);
+    if (inventoryOpen) setInventoryOpen(false);
+    else if (started) setMenuOpen(true);
     return;
   }
-  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyR'].includes(event.code)) event.preventDefault();
+  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyR', 'Space'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
   if (event.code === 'KeyE' && !event.repeat && !inventoryOpen) doAction();
-  if (event.code === 'KeyR' && !event.repeat) window.location.reload();
+  if (event.code === 'KeyR' && !event.repeat) startReload();
+  if (event.code === 'Space' && !inventoryOpen) {
+    fireHeld = true;
+    if (!event.repeat) fireWeapon();
+  }
 });
-document.addEventListener('keyup', (event) => keys.delete(event.code));
-document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); lookState = null; } });
+document.addEventListener('keyup', (event) => {
+  keys.delete(event.code);
+  if (event.code === 'Space') fireHeld = false;
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); resetJoystick(); lookState = null; fireHeld = false; firePointerId = null; } });
+window.addEventListener('blur', () => { keys.clear(); fireHeld = false; firePointerId = null; resetJoystick(); }, { passive: true });
 
+updateAmmoHUD();
 updateHealthHUD();
 updateNeedsHUD();
 updateInventoryUI();
