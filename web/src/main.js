@@ -2,14 +2,17 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
 import { PLAYER_WALK_SPEED, PLAYER_SPRINT_SPEED, scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
-import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, terrainHeightAt, terrainSlopeAt, terrainColliderSegments } from './village.js';
+import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, VILLAGE_SIDEWALKS, getBusStopColliderBoxes, getVillageHousePlacement, terrainHeightAt, terrainSlopeAt, terrainColliderSegments } from './village.js';
+import { buildVillageRuins } from './village-structures.js';
 import {
   createVillageResidents,
   selectActiveResidents,
   VILLAGE_RESIDENT_COUNT,
   MAX_ACTIVE_RESIDENTS,
   RESIDENT_VISIBILITY_RADIUS,
-  RESIDENT_RETENTION_RADIUS
+  RESIDENT_RETENTION_RADIUS,
+  buildVillageRoadGraph,
+  findVillageRoadPath
 } from './residents.js';
 
 const isMeleeWeapon = (weapon) => weapon?.type === 'melee' || weapon?.type === 'tool';
@@ -212,6 +215,35 @@ function makeWindowTexture() {
   return texture;
 }
 
+function makeVillageShopSignTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  // The facade faces the negative-Z street, so mirror the texture before rotating the sign toward it.
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.fillStyle = '#f2f1e8';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#c9343d';
+  ctx.fillRect(0, 0, 216, canvas.height);
+  ctx.fillStyle = '#1d7145';
+  ctx.fillRect(216, 0, canvas.width - 216, canvas.height);
+  ctx.fillStyle = '#e9f0e6';
+  ctx.font = 'bold 198px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('5', 108, 128);
+  ctx.font = 'bold 94px Arial, sans-serif';
+  ctx.fillText('ПЯТЁРОЧКА', 620, 130);
+  ctx.fillStyle = '#c9343d';
+  ctx.fillRect(216, 224, canvas.width - 216, 18);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  return texture;
+}
+
 function makeBrickTexture(seed) {
   const brickCanvas = document.createElement('canvas');
   brickCanvas.width = 512;
@@ -316,6 +348,7 @@ const roadTexture = makeRoadTexture(2048);
 roadTexture.repeat.set(1, 1);
 const roadMaterial = new THREE.MeshStandardMaterial({ map: roadTexture, color: 0xe1d8c7, roughness: 0.98, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 });
 const roadEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x998873, roughness: 1, side: THREE.DoubleSide });
+const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0xb9bbb5, roughness: 0.98, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 });
 const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x78855d, roughness: 1, side: THREE.DoubleSide });
 const deadGrassMaterial = new THREE.MeshStandardMaterial({ color: 0x9b895f, roughness: 1, side: THREE.DoubleSide });
 const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0x70604a, roughness: 1 });
@@ -411,7 +444,7 @@ function addStaticBoxMesh(geometry, material, position, options = {}) {
   return mesh;
 }
 
-function addStaticCollider(position, halfExtents, material = floorPhysicsMaterial) {
+function addStaticCollider(position, halfExtents, material = floorPhysicsMaterial, rotation = [0, 0, 0]) {
   const body = new CANNON.Body({
     mass: 0,
     material,
@@ -420,6 +453,7 @@ function addStaticCollider(position, halfExtents, material = floorPhysicsMateria
   });
   body.addShape(new CANNON.Box(new CANNON.Vec3(halfExtents[0], halfExtents[1], halfExtents[2])));
   body.position.set(position[0], position[1], position[2]);
+  if (rotation.some((angle) => angle !== 0)) body.quaternion.setFromEuler(rotation[0], rotation[1], rotation[2], 'XYZ');
   world.addBody(body);
   return body;
 }
@@ -504,6 +538,7 @@ const brickTexture = makeBrickTexture(483);
 brickTexture.repeat.set(2.6, 1.45);
 const brickBumpTexture = brickTexture.clone(); brickBumpTexture.colorSpace = THREE.NoColorSpace;
 const brickMaterial = new THREE.MeshStandardMaterial({ map: brickTexture, bumpMap: brickBumpTexture, bumpScale: 0.035, color: 0xf1e3d2, roughness: 0.94 });
+const ruinBrickMaterial = new THREE.MeshStandardMaterial({ map: brickTexture, bumpMap: brickBumpTexture, bumpScale: 0.06, color: 0xa79580, roughness: 0.98 });
 const villageRoofMaterials = [
   new THREE.MeshStandardMaterial({ color: 0x38423f, roughness: 0.82, metalness: 0.16 }),
   new THREE.MeshStandardMaterial({ color: 0x66513d, roughness: 0.94, metalness: 0.02 }),
@@ -514,6 +549,18 @@ const shopAwningMaterials = [
   new THREE.MeshStandardMaterial({ color: 0x315b4f, roughness: 0.82 }),
   new THREE.MeshStandardMaterial({ color: 0xd8c9a9, roughness: 0.9 })
 ];
+const shopWallMaterial = new THREE.MeshStandardMaterial({ color: 0xe6e4dc, roughness: 0.88 });
+const shopGreenMaterial = new THREE.MeshStandardMaterial({ color: 0x1f7047, roughness: 0.72 });
+const shopRedMaterial = new THREE.MeshStandardMaterial({ color: 0xc9363d, roughness: 0.68 });
+const shopFrameMaterial = new THREE.MeshStandardMaterial({ color: 0x394649, roughness: 0.65, metalness: 0.28 });
+const shopGlassMaterial = new THREE.MeshStandardMaterial({ color: 0x87a9ad, roughness: 0.2, metalness: 0.06, transparent: true, opacity: 0.58, depthWrite: false, side: THREE.DoubleSide });
+const shopRoofMaterial = new THREE.MeshStandardMaterial({ color: 0x545e5c, roughness: 0.76, metalness: 0.22 });
+const garageSteelMaterial = new THREE.MeshStandardMaterial({ color: 0x687370, roughness: 0.7, metalness: 0.48 });
+const garageDoorMaterial = new THREE.MeshStandardMaterial({ color: 0x515e5d, roughness: 0.64, metalness: 0.5 });
+const garageTrimMaterial = new THREE.MeshStandardMaterial({ color: 0x303b3c, roughness: 0.62, metalness: 0.54 });
+const ruinTimberMaterial = new THREE.MeshStandardMaterial({ color: 0x514538, roughness: 0.96 });
+const ruinTimberLightMaterial = new THREE.MeshStandardMaterial({ color: 0x71604b, roughness: 0.94 });
+const ruinCorrugatedMaterial = new THREE.MeshStandardMaterial({ color: 0x354247, roughness: 0.8, metalness: 0.42, side: THREE.DoubleSide });
 const fenceWoodMaterial = new THREE.MeshStandardMaterial({ color: 0x665039, roughness: 0.93 });
 const doorPanelMaterial = new THREE.MeshStandardMaterial({ color: 0x493a2d, roughness: 0.9 });
 const windowMaterial = new THREE.MeshStandardMaterial({ map: makeWindowTexture(), roughness: 0.54, metalness: 0.05, side: THREE.DoubleSide });
@@ -1221,33 +1268,120 @@ function addBusStop() {
   addBuildingPart([6.4, 0.22, 4.2], [stop.x, ground + 0.11, stop.z], stoneMaterial);
   for (const dx of [-2.8, 2.8]) for (const dz of [-1.65, 1.65]) {
     addBuildingPart([0.16, 2.6, 0.16], [stop.x + dx, ground + 1.3, stop.z + dz], supportMat);
-    addStaticCollider([stop.x + dx, ground + 1.3, stop.z + dz], [0.08, 1.3, 0.08]);
   }
   addBuildingPart([6.6, 0.22, 4.3], [stop.x, ground + 2.66, stop.z], villageRoofMaterials[3], false, [0, 0, -0.015]);
   addBuildingPart([4.5, 0.12, 0.54], [stop.x, ground + 0.72, stop.z + 1.1], fenceWoodMaterial);
   addBuildingPart([4.5, 0.12, 0.14], [stop.x, ground + 1.12, stop.z + 1.27], fenceWoodMaterial);
+  for (const collider of getBusStopColliderBoxes(stop)) addStaticCollider(collider.position, collider.halfExtents);
 }
 
 function addShopFacade(shop) {
   const ground = terrainHeightAt(shop.x);
-  const canopyY = ground + 3.05;
-  const canopyZ = shop.z + shop.depth / 2 + 0.5;
-  addBuildingPart([7.2, 0.18, 1.2], [shop.x, canopyY, canopyZ], shopAwningMaterials[0]);
-  for (let i = 0; i < 8; i++) {
-    const x = shop.x - 2.8 + i * 0.8;
-    addBuildingPart([0.72, 0.035, 1.14], [x, canopyY + 0.108, canopyZ], shopAwningMaterials[i % 2]);
-  }
+  const wallBase = ground + 0.28;
+  const wallTop = wallBase + shop.height;
+  const wallCenterY = (wallBase + wallTop) / 2;
+  const frontWallZ = shop.z - shop.depth / 2 + 0.21;
+  const frontFaceZ = frontWallZ - 0.21;
+  const windowBottom = ground + 0.46;
+  const windowTop = ground + 2.96;
+  const windowHeight = windowTop - windowBottom;
+  const windowCenterY = (windowBottom + windowTop) / 2;
+
+  addBuildingPart([shop.width + 0.5, 0.28, shop.depth + 0.5], [shop.x, ground + 0.14, shop.z], stoneMaterial);
+  addBuildingPart([0.42, shop.height, shop.depth], [shop.x - shop.width / 2 + 0.21, wallCenterY, shop.z], shopWallMaterial);
+  addBuildingPart([0.42, shop.height, shop.depth], [shop.x + shop.width / 2 - 0.21, wallCenterY, shop.z], shopWallMaterial);
+  addBuildingPart([shop.width, shop.height, 0.42], [shop.x, wallCenterY, shop.z + shop.depth / 2 - 0.21], shopWallMaterial);
+  addBuildingPart([shop.width + 0.7, 0.22, shop.depth + 0.7], [shop.x, wallTop + 0.11, shop.z], shopRoofMaterial);
+  addStaticCollider([shop.x, wallCenterY, shop.z], [shop.width / 2, shop.height / 2, shop.depth / 2]);
+
+  // A broken-up front wall leaves two broad glazed display windows and a visible double-door entrance.
+  addBuildingPart([shop.width, windowBottom - wallBase, 0.42], [shop.x, (windowBottom + wallBase) / 2, frontWallZ], shopWallMaterial);
+  addBuildingPart([shop.width, wallTop - windowTop, 0.42], [shop.x, (wallTop + windowTop) / 2, frontWallZ], shopWallMaterial);
   for (const side of [-1, 1]) {
-    addBuildingPart([0.11, 2.95, 0.12], [shop.x + side * 3.55, ground + 1.48, canopyZ + 0.38], fenceWoodMaterial);
-    addBuildingPart([0.34, 0.22, 0.14], [shop.x + side * 3.55, ground + 2.48, shop.z + shop.depth / 2 + 0.16], shopAwningMaterials[1]);
+    addBuildingPart([1.6, windowHeight, 0.42], [shop.x + side * 10.0, windowCenterY, frontWallZ], shopWallMaterial);
+    addBuildingPart([0.6, windowHeight, 0.42], [shop.x + side * 1.7, windowCenterY, frontWallZ], shopWallMaterial);
   }
+  const glazingZ = frontFaceZ - 0.035;
+  for (const centerX of [shop.x - 5.6, shop.x + 5.6]) {
+    const glazing = new THREE.Mesh(new THREE.PlaneGeometry(7.2, windowHeight), shopGlassMaterial);
+    glazing.position.set(centerX, windowCenterY, glazingZ);
+    glazing.rotation.y = Math.PI;
+    glazing.castShadow = false;
+    glazing.receiveShadow = true;
+    scene.add(glazing);
+    addBuildingPart([0.09, windowHeight, 0.12], [centerX, windowCenterY, glazingZ - 0.035], shopFrameMaterial);
+    addBuildingPart([7.2, 0.09, 0.12], [centerX, windowBottom, glazingZ - 0.035], shopFrameMaterial);
+    addBuildingPart([7.2, 0.09, 0.12], [centerX, windowTop, glazingZ - 0.035], shopFrameMaterial);
+    addBuildingPart([0.08, windowHeight, 0.12], [centerX - 3.6, windowCenterY, glazingZ - 0.035], shopFrameMaterial);
+    addBuildingPart([0.08, windowHeight, 0.12], [centerX + 3.6, windowCenterY, glazingZ - 0.035], shopFrameMaterial);
+  }
+  const doorWidth = 2.4;
+  const doorHeight = windowTop - wallBase;
+  const doorCenterY = wallBase + doorHeight / 2;
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(doorWidth, doorHeight), shopGlassMaterial);
+  door.position.set(shop.x, doorCenterY, glazingZ - 0.018);
+  door.rotation.y = Math.PI;
+  scene.add(door);
+  for (const side of [-1, 1]) addBuildingPart([0.1, doorHeight, 0.13], [shop.x + side * doorWidth / 2, doorCenterY, glazingZ - 0.06], shopFrameMaterial);
+  addBuildingPart([doorWidth, 0.11, 0.13], [shop.x, wallBase, glazingZ - 0.06], shopFrameMaterial);
+  addBuildingPart([doorWidth, 0.11, 0.13], [shop.x, windowTop, glazingZ - 0.06], shopFrameMaterial);
+  for (const side of [-1, 1]) addBuildingPart([0.045, 0.42, 0.055], [shop.x + side * 0.18, doorCenterY, glazingZ - 0.12], garageTrimMaterial);
+
+  addBuildingPart([shop.width - 2.2, 0.18, 0.32], [shop.x, ground + 3.08, frontFaceZ - 0.48], shopGreenMaterial);
+  const signY = ground + 3.75;
+  const signZ = frontFaceZ - 0.25;
+  addBuildingPart([14.2, 0.96, 0.18], [shop.x, signY, signZ], shopFrameMaterial);
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(13.9, 0.78),
+    new THREE.MeshBasicMaterial({ map: makeVillageShopSignTexture(), side: THREE.DoubleSide, toneMapped: false })
+  );
+  sign.position.set(shop.x, signY, signZ - 0.105);
+  sign.rotation.y = Math.PI;
+  sign.castShadow = false;
+  scene.add(sign);
 }
+
+function addMetalGarage(garage) {
+  const { x, z, width, depth, height } = garage;
+  const ground = terrainHeightAt(x);
+  const wallHeight = height - 0.3;
+  const wallBase = ground + 0.18;
+  const wallTop = wallBase + wallHeight;
+  const wallCenterY = (wallBase + wallTop) / 2;
+  const frontWallZ = z - depth / 2 + 0.12;
+  const frontFaceZ = frontWallZ - 0.1;
+  const doorWidth = width - 1.5;
+  const doorHeight = wallHeight - 0.42;
+  const doorY = wallBase + doorHeight / 2;
+  addBuildingPart([width + 0.4, 0.18, depth + 0.4], [x, ground + 0.09, z], stoneMaterial);
+  addBuildingPart([0.18, wallHeight, depth], [x - width / 2 + 0.09, wallCenterY, z], garageSteelMaterial);
+  addBuildingPart([0.18, wallHeight, depth], [x + width / 2 - 0.09, wallCenterY, z], garageSteelMaterial);
+  addBuildingPart([width, wallHeight, 0.18], [x, wallCenterY, z + depth / 2 - 0.09], garageSteelMaterial);
+  addBuildingPart([0.78, wallHeight, 0.2], [x - width / 2 + 0.39, wallCenterY, frontWallZ], garageSteelMaterial);
+  addBuildingPart([0.78, wallHeight, 0.2], [x + width / 2 - 0.39, wallCenterY, frontWallZ], garageSteelMaterial);
+  addBuildingPart([width - 1.3, 0.38, 0.2], [x, wallTop - 0.19, frontWallZ], garageSteelMaterial);
+  const shutter = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, doorHeight, 0.12), garageDoorMaterial);
+  shutter.position.set(x, doorY, frontFaceZ);
+  scene.add(shutter);
+  for (let rib = 0; rib < 13; rib++) {
+    const y = wallBase + 0.14 + rib * (doorHeight - 0.2) / 12;
+    addBuildingPart([doorWidth - 0.06, 0.045, 0.035], [x, y, frontFaceZ - 0.08], garageTrimMaterial);
+  }
+  for (const side of [-1, 1]) addBuildingPart([0.1, doorHeight + 0.12, 0.14], [x + side * (doorWidth / 2 + 0.07), doorY, frontFaceZ - 0.02], garageTrimMaterial);
+  addBuildingPart([width + 0.35, 0.2, depth + 0.35], [x, wallTop + 0.1, z], garageSteelMaterial);
+  addStaticCollider([x, wallCenterY, z], [width / 2, wallHeight / 2, depth / 2]);
+}
+
 
 function buildVillageWorld() {
   addPond();
   for (const road of VILLAGE_LAYOUT.roads) {
     addRoadRibbon(road.points, road.width + 0.9, roadEdgeMaterial, true);
     addRoadRibbon(road.points, road.width, roadMaterial, false);
+  }
+  for (const sidewalk of VILLAGE_SIDEWALKS) {
+    addRoadRibbon(sidewalk.points, sidewalk.width + 0.26, roadEdgeMaterial, true);
+    addRoadRibbon(sidewalk.points, sidewalk.width, sidewalkMaterial, false);
   }
   addGrassPatch(-274, -342, 35, 88, 340, deadGrassMaterial, 67);
   addGrassPatch(-283, -216, 34, 72, 320, grassMaterial, 119);
@@ -1268,16 +1402,12 @@ function buildVillageWorld() {
 
   for (const lot of VILLAGE_LAYOUT.lots) {
     addFenceArea(lot.x, lot.z, lot.width, lot.depth, lot.gate);
-    let x = lot.x, z = lot.z;
-    if (lot.gate === 'east') x -= 6;
-    else if (lot.gate === 'west') x += 6;
-    else if (lot.gate === 'north') z += 5;
-    else z -= 5;
+    const house = getVillageHousePlacement(lot);
     const wallMaterial = lot.id.startsWith('S-') || Number(lot.id.split('-')[1]) % 3 === 0
       ? brickMaterial
       : woodMaterials[Number(lot.id.split('-')[1]) % woodMaterials.length];
     addVillageBuilding({
-      x, z, width: lot.houseWidth, depth: lot.houseDepth, height: lot.id.startsWith('S-') ? 3.1 : 2.85,
+      x: house.x, z: house.z, width: lot.houseWidth, depth: lot.houseDepth, height: lot.id.startsWith('S-') ? 3.1 : 2.85,
       wallMaterial,
       roofType: lot.roof, roofMaterial: villageRoofMaterials[(lot.roof + Number(lot.id.split('-')[1])) % villageRoofMaterials.length],
       brick: wallMaterial === brickMaterial, windows: lot.houseWidth > 11 ? 2 : 1, chimney: true
@@ -1288,12 +1418,21 @@ function buildVillageWorld() {
   addVillageBuilding({ x: school.x, z: school.z, width: school.width, depth: school.depth, height: 4.8, wallMaterial: brickMaterial, roofType: 1, roofMaterial: villageRoofMaterials[2], windows: 7, chimney: true });
   const shop = VILLAGE_LAYOUT.shop;
   addFenceArea(shop.x, shop.z, 24, 19, 'north', 3.2);
-  addVillageBuilding({ x: shop.x, z: shop.z, width: shop.width, depth: shop.depth, height: 3.45, wallMaterial: woodMaterials[2], roofType: 0, roofMaterial: villageRoofMaterials[1], windows: 2 });
   addShopFacade(shop);
-  for (let i = 0; i < VILLAGE_LAYOUT.garages.length; i++) {
-    const garage = VILLAGE_LAYOUT.garages[i];
-    addVillageBuilding({ x: garage.x, z: garage.z, width: garage.width, depth: garage.depth, height: 2.8, wallMaterial: woodMaterials[i % woodMaterials.length], roofType: i % 4, roofMaterial: villageRoofMaterials[i % villageRoofMaterials.length], windows: 0, chimney: false });
-  }
+  for (const garage of VILLAGE_LAYOUT.garages) addMetalGarage(garage);
+  buildVillageRuins({
+    layout: VILLAGE_LAYOUT,
+    terrainHeightAt,
+    addBuildingPart,
+    addStaticCollider,
+    materials: {
+      stone: stoneMaterial,
+      brick: ruinBrickMaterial,
+      corrugated: ruinCorrugatedMaterial,
+      timber: ruinTimberMaterial,
+      timberLight: ruinTimberLightMaterial
+    }
+  });
   addBusStop();
   for (const hangar of VILLAGE_LAYOUT.hangars) {
     addFenceArea(hangar.x, hangar.z, hangar.width + 9, hangar.depth + 10, 'south', 5.0);
@@ -2075,135 +2214,44 @@ world.addBody(playerBody);
 const auntZina = buildAuntZina();
 let sprintHeld = false;
 
-function buildResidentRoadGraph() {
-  const serviceTrack = [[238, -310], [216, -313], [194, -316], [171, -319], [145, -321.5]];
-  const roadLines = [...VILLAGE_LAYOUT.roads.map((road) => road.points), serviceTrack];
-  const nodes = [];
-  const edges = [];
-  roadLines.forEach((line, lineIndex) => {
-    let previous = -1;
-    for (const [x, z] of line) {
-      const index = nodes.length;
-      nodes.push({ x, z, lineIndex });
-      edges.push([]);
-      if (previous >= 0) {
-        const distance = Math.hypot(x - nodes[previous].x, z - nodes[previous].z);
-        edges[index].push({ to: previous, distance });
-        edges[previous].push({ to: index, distance });
-      }
-      previous = index;
-    }
-  });
-  const maxConnectorDistance = 38;
-  for (let a = 0; a < nodes.length; a++) {
-    for (let b = a + 1; b < nodes.length; b++) {
-      if (nodes[a].lineIndex === nodes[b].lineIndex) continue;
-      const distance = Math.hypot(nodes[a].x - nodes[b].x, nodes[a].z - nodes[b].z);
-      if (distance <= maxConnectorDistance && distance > 0.25) {
-        edges[a].push({ to: b, distance });
-        edges[b].push({ to: a, distance });
-      }
-    }
-  }
-  return { nodes, edges };
-}
-
-function findResidentRoadPath(start, destination) {
-  const { nodes, edges } = residentRoadGraph;
-  if (!nodes.length) return [start, destination];
-  const nearestNode = (point) => {
-    let nearest = 0;
-    let distanceSquared = Infinity;
-    for (let i = 0; i < nodes.length; i++) {
-      const dx = nodes[i].x - point.x;
-      const dz = nodes[i].z - point.z;
-      const nextDistanceSquared = dx * dx + dz * dz;
-      if (nextDistanceSquared < distanceSquared) {
-        nearest = i;
-        distanceSquared = nextDistanceSquared;
-      }
-    }
-    return nearest;
-  };
-  const source = nearestNode(start);
-  const target = nearestNode(destination);
-  const distances = new Array(nodes.length).fill(Infinity);
-  const previous = new Array(nodes.length).fill(-1);
-  const visited = new Array(nodes.length).fill(false);
-  distances[source] = 0;
-  for (let step = 0; step < nodes.length; step++) {
-    let current = -1;
-    let bestDistance = Infinity;
-    for (let i = 0; i < nodes.length; i++) {
-      if (!visited[i] && distances[i] < bestDistance) {
-        current = i;
-        bestDistance = distances[i];
-      }
-    }
-    if (current < 0 || current === target) break;
-    visited[current] = true;
-    for (const edge of edges[current]) {
-      const nextDistance = bestDistance + edge.distance;
-      if (nextDistance < distances[edge.to]) {
-        distances[edge.to] = nextDistance;
-        previous[edge.to] = current;
-      }
-    }
-  }
-  if (!Number.isFinite(distances[target])) return [start, destination];
-  const nodeRoute = [];
-  for (let at = target; at >= 0; at = previous[at]) {
-    nodeRoute.push(at);
-    if (at === source) break;
-  }
-  nodeRoute.reverse();
-  const route = [{ x: start.x, z: start.z }];
-  for (const nodeIndex of nodeRoute) {
-    const node = nodes[nodeIndex];
-    const last = route[route.length - 1];
-    if (Math.hypot(last.x - node.x, last.z - node.z) > 0.75) route.push({ x: node.x, z: node.z });
-  }
-  const last = route[route.length - 1];
-  if (Math.hypot(last.x - destination.x, last.z - destination.z) > 0.75) route.push({ x: destination.x, z: destination.z });
-  return route;
-}
-
-const residentRoadGraph = buildResidentRoadGraph();
+const residentRoadGraph = buildVillageRoadGraph(VILLAGE_LAYOUT, VILLAGE_SIDEWALKS);
 const residentShopDestination = {
   x: VILLAGE_LAYOUT.shop.x,
-  z: VILLAGE_LAYOUT.shop.z - (19 / 2) + 1.3
+  z: VILLAGE_LAYOUT.shop.z - VILLAGE_LAYOUT.shop.depth / 2 - 0.72
 };
 const residentMikhtokDestination = {
   x: VILLAGE_LAYOUT.hangars[0].x,
-  z: VILLAGE_LAYOUT.hangars[0].z + VILLAGE_LAYOUT.hangars[0].depth / 2 + 10
+  z: VILLAGE_LAYOUT.hangars[0].z + VILLAGE_LAYOUT.hangars[0].depth / 2 + 6.2
 };
 const residentPopulation = createVillageResidents(VILLAGE_LAYOUT, VILLAGE_RESIDENT_COUNT);
 let activeVillageResidents = new Set();
 let residentActivationTimer = 0;
 let residentSimulationTimer = 0;
 const residentClothingPalettes = [
-  { coat: 0x747b7a, trousers: 0x555e61 }, { coat: 0x646e70, trousers: 0x4c5558 },
-  { coat: 0x777870, trousers: 0x58584f }, { coat: 0x59686a, trousers: 0x444f52 },
-  { coat: 0x77716a, trousers: 0x54504d }, { coat: 0x65706b, trousers: 0x4b5550 }
+  { coat: 0x4d5558, trousers: 0x343b3e }, { coat: 0x596164, trousers: 0x3b4346 },
+  { coat: 0x414a4d, trousers: 0x303639 }, { coat: 0x62696a, trousers: 0x42494b },
+  { coat: 0x4a5153, trousers: 0x383e40 }, { coat: 0x555b5b, trousers: 0x3b4142 }
 ].map((palette) => ({
   coat: new THREE.MeshStandardMaterial({ color: palette.coat, roughness: 0.9 }),
   trousers: new THREE.MeshStandardMaterial({ color: palette.trousers, roughness: 0.93 })
 }));
 const residentSkinMaterial = new THREE.MeshStandardMaterial({ color: 0xbba18a, roughness: 0.94 });
-const residentBootMaterial = new THREE.MeshStandardMaterial({ color: 0x403b34, roughness: 0.92 });
+const residentGloveMaterial = new THREE.MeshStandardMaterial({ color: 0x303638, roughness: 0.92 });
+const residentBootMaterial = new THREE.MeshStandardMaterial({ color: 0x303334, roughness: 0.92 });
 const residentHairMaterials = [0x62574a, 0x77756b, 0x4a4a45].map((value) => new THREE.MeshStandardMaterial({ color: value, roughness: 0.95 }));
 const residentGeometry = {
-  torso: new THREE.BoxGeometry(0.48, 0.62, 0.3),
-  pelvis: new THREE.BoxGeometry(0.4, 0.25, 0.28),
-  neck: new THREE.BoxGeometry(0.16, 0.13, 0.16),
-  head: new THREE.BoxGeometry(0.38, 0.39, 0.34),
-  hair: new THREE.BoxGeometry(0.39, 0.09, 0.35),
-  upperArm: new THREE.BoxGeometry(0.17, 0.37, 0.18),
-  lowerArm: new THREE.BoxGeometry(0.15, 0.35, 0.16),
-  hand: new THREE.BoxGeometry(0.14, 0.13, 0.15),
-  thigh: new THREE.BoxGeometry(0.21, 0.43, 0.22),
-  shin: new THREE.BoxGeometry(0.17, 0.38, 0.18),
-  boot: new THREE.BoxGeometry(0.22, 0.13, 0.3)
+  torso: new THREE.BoxGeometry(0.54, 0.68, 0.36),
+  pelvis: new THREE.BoxGeometry(0.44, 0.26, 0.32),
+  collar: new THREE.BoxGeometry(0.32, 0.14, 0.36),
+  neck: new THREE.BoxGeometry(0.16, 0.12, 0.16),
+  head: new THREE.BoxGeometry(0.4, 0.42, 0.38),
+  hair: new THREE.BoxGeometry(0.41, 0.1, 0.39),
+  upperArm: new THREE.BoxGeometry(0.2, 0.4, 0.2),
+  lowerArm: new THREE.BoxGeometry(0.18, 0.37, 0.18),
+  hand: new THREE.BoxGeometry(0.16, 0.14, 0.16),
+  thigh: new THREE.BoxGeometry(0.23, 0.44, 0.24),
+  shin: new THREE.BoxGeometry(0.19, 0.4, 0.2),
+  boot: new THREE.BoxGeometry(0.24, 0.14, 0.32)
 };
 
 function residentDestination(index, resident) {
@@ -2215,12 +2263,14 @@ function residentDestination(index, resident) {
 function planResidentRoute(resident, targetIndex) {
   resident.targetIndex = ((targetIndex % 3) + 3) % 3;
   const destination = residentDestination(resident.targetIndex, resident);
-  resident.path = findResidentRoadPath({ x: resident.x, z: resident.z }, destination);
+  resident.path = findVillageRoadPath(residentRoadGraph, { x: resident.x, z: resident.z }, destination);
   resident.pathIndex = resident.path.length > 1 ? 1 : 0;
   resident.state = 'walking';
   resident.fleeing = false;
   resident.fleeTimer = 0;
   resident.fleeTarget = null;
+  resident.fleePath = null;
+  resident.fleePathIndex = 0;
 }
 
 for (const resident of residentPopulation) planResidentRoute(resident, resident.targetIndex);
@@ -2243,6 +2293,7 @@ function buildResidentModel(resident) {
   root.add(body);
   addResidentMesh(body, residentGeometry.pelvis, palette.trousers, [0, 0.76, 0]);
   addResidentMesh(body, residentGeometry.torso, palette.coat, [0, 1.12, 0]);
+  addResidentMesh(body, residentGeometry.collar, palette.coat, [0, 1.43, 0]);
   addResidentMesh(body, residentGeometry.neck, residentSkinMaterial, [0, 1.48, 0]);
   const head = new THREE.Group();
   head.position.set(0, 1.54, 0);
@@ -2260,7 +2311,7 @@ function buildResidentModel(resident) {
     forearm.position.y = -0.35;
     arm.add(forearm);
     addResidentMesh(forearm, residentGeometry.lowerArm, palette.coat, [0, -0.17, 0]);
-    addResidentMesh(forearm, residentGeometry.hand, residentSkinMaterial, [0, -0.39, 0]);
+    addResidentMesh(forearm, residentGeometry.hand, residentGloveMaterial, [0, -0.39, 0]);
     arms.push(arm);
   }
 
@@ -2333,29 +2384,55 @@ function moveResidentToward(resident, destination, speed, dt) {
   return distance <= step + 0.035;
 }
 
+function planResidentEscape(resident) {
+  const awayX = resident.x - playerBody.position.x;
+  const awayZ = resident.z - playerBody.position.z;
+  const threatDistance = Math.hypot(awayX, awayZ);
+  const length = threatDistance > 0.1 ? threatDistance : 1;
+  const awayDirection = threatDistance > 0.1
+    ? { x: awayX / length, z: awayZ / length }
+    : { x: Math.sin(resident.index * 2.399963229728653), z: Math.cos(resident.index * 2.399963229728653) };
+  const candidates = residentRoadGraph.nodes.map((node) => {
+    const dx = node.x - resident.x;
+    const dz = node.z - resident.z;
+    const playerDistance = Math.hypot(node.x - playerBody.position.x, node.z - playerBody.position.z);
+    const routeDistance = Math.hypot(dx, dz);
+    const outwardProgress = dx * awayDirection.x + dz * awayDirection.z;
+    return { node, playerDistance, routeDistance, outwardProgress, score: playerDistance + outwardProgress * 0.32 - routeDistance * 0.08 };
+  }).filter((candidate) => candidate.routeDistance >= 7 && candidate.routeDistance <= 38 &&
+    candidate.playerDistance >= threatDistance + 5 && candidate.outwardProgress >= 2)
+    .sort((a, b) => b.score - a.score || a.routeDistance - b.routeDistance);
+
+  for (const candidate of candidates.slice(0, 16)) {
+    const path = findVillageRoadPath(residentRoadGraph, { x: resident.x, z: resident.z }, candidate.node);
+    if (path.length < 2) continue;
+    resident.fleePath = path;
+    resident.fleePathIndex = 1;
+    resident.fleeTarget = path.at(-1);
+    resident.fleeing = true;
+    resident.fleeTimer = THREE.MathUtils.clamp(path.length * 0.42, 3.5, 7.0);
+    resident.dwellTimer = 0;
+    return true;
+  }
+  return false;
+}
+
 function advanceResident(resident, dt, playerThreat = false) {
   if (playerThreat) {
-    const awayX = resident.x - playerBody.position.x;
-    const awayZ = resident.z - playerBody.position.z;
-    const distance = Math.hypot(awayX, awayZ);
-    if (distance < 28 && (!resident.fleeing || resident.fleeTimer < 0.75)) {
-      const angle = distance > 0.1 ? Math.atan2(awayX, awayZ) : resident.index * 2.399963229728653;
-      const length = 16 + (resident.index % 5) * 1.4;
-      resident.fleeTarget = {
-        x: THREE.MathUtils.clamp(resident.x + Math.sin(angle) * length, VILLAGE_BOUNDS.minX + 3, VILLAGE_BOUNDS.maxX - 3),
-        z: THREE.MathUtils.clamp(resident.z + Math.cos(angle) * length, VILLAGE_BOUNDS.minZ + 3, VILLAGE_BOUNDS.maxZ - 3)
-      };
-      resident.fleeing = true;
-      resident.fleeTimer = 4.8;
-      resident.dwellTimer = 0;
-    }
+    const distance = Math.hypot(resident.x - playerBody.position.x, resident.z - playerBody.position.z);
+    if (distance < 28 && (!resident.fleeing || resident.fleeTimer < 0.75)) planResidentEscape(resident);
   }
 
-  if (resident.fleeing && resident.fleeTarget) {
+  if (resident.fleeing && resident.fleePath) {
     resident.state = 'fleeing';
     resident.fleeTimer = Math.max(0, resident.fleeTimer - dt);
-    const reached = moveResidentToward(resident, resident.fleeTarget, resident.moveSpeed * 3.05, dt);
-    if (reached || resident.fleeTimer <= 0) planResidentRoute(resident, resident.targetIndex);
+    const waypoint = resident.fleePath[resident.fleePathIndex];
+    if (!waypoint || resident.fleeTimer <= 0) {
+      planResidentRoute(resident, resident.targetIndex);
+    } else if (moveResidentToward(resident, waypoint, resident.moveSpeed * 3.05, dt)) {
+      resident.fleePathIndex++;
+      if (resident.fleePathIndex >= resident.fleePath.length) planResidentRoute(resident, resident.targetIndex);
+    }
     resident.walkPhase += dt * resident.moveSpeed * 10;
     return;
   }

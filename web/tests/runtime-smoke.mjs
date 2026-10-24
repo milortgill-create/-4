@@ -7,6 +7,7 @@ import * as arsenal from '../src/arsenal.js';
 import * as survival from '../src/survival.js';
 import * as village from '../src/village.js';
 import * as residents from '../src/residents.js';
+import * as villageStructures from '../src/village-structures.js';
 
 // Boot the complete main module against a small DOM/WebGL shim so top-level scene errors
 // and first-frame exceptions are caught in CI without requiring a browser or Android SDK.
@@ -121,6 +122,7 @@ const sandbox = {
   ...survival,
   ...village,
   ...residents,
+  ...villageStructures,
   document,
   window,
   URL,
@@ -236,7 +238,7 @@ sandbox.__joystick.y = 0;
 sandbox.__updateCamera(1 / 60);
 const fleeStart = { x: nearbyResident.x, z: nearbyResident.z };
 sandbox.__sprintButton.dispatch('pointerdown', sprintEvent);
-sandbox.__updateResidents(0.5);
+for (let i = 0; i < 6; i++) sandbox.__updateResidents(0.25);
 assert.equal(nearbyResident.fleeing, true, 'a nearby villager should enter flee behavior when the armed player sprints');
 assert.ok(Math.hypot(nearbyResident.x - fleeStart.x, nearbyResident.z - fleeStart.z) > 0.5, 'a threatened villager should move away from the player');
 sandbox.__sprintButton.dispatch('pointerup', { pointerId: 7 });
