@@ -72,7 +72,9 @@ assert.match(mainSource, /function createBulletMark\(/, 'wall hits should create
 assert.match(mainSource, /currentWeaponId = null/, 'the player should spawn without an equipped weapon');
 assert.match(mainSource, /let inventoryItems = \[\]/, 'the backpack should start empty');
 assert.match(mainSource, /handGroup\.visible = false/, 'first-person hands should start hidden');
-assert.match(mainSource, /bulletSurface: true/, 'room walls must be included in bullet raycasts');
+assert.match(mainSource, /bulletSurfaceTargets\.push\(mesh\)/, 'village building surfaces must be included in bullet raycasts');
+assert.match(mainSource, /handGroup\.visible = Boolean\(currentWeaponId\) && !dead/, 'FP hands must stay hidden unless a weapon is equipped');
+assert.match(mainSource, /weaponView\.visible = !dead && Boolean\(weapon\)/, 'an unarmed player must not render the weapon-and-hands view model');
 assert.match(mainSource, /ragdollPart\.body\.type = CANNON\.Body\.DYNAMIC/, 'weapon impacts should switch a mannequin to ragdoll physics');
 assert.match(mainSource, /damageMannequin\(human, weapon, meta\.key/, 'weapon hits should subtract mannequin health');
 

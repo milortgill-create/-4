@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { WEAPON_CATALOG, WEAPON_BY_ID, createAmmoState, consumeAmmo, reloadAmmo, damageMannequin, traceHitscan } from './arsenal.js';
 import { scoopSnow, depositSnow, movementSpeedWithSnow, updateHeat } from './survival.js';
+import { VILLAGE_BOUNDS, VILLAGE_LAYOUT, terrainHeightAt } from './village.js';
 
 const isMeleeWeapon = (weapon) => weapon?.type === 'melee' || weapon?.type === 'tool';
 
@@ -26,9 +27,9 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87979b);
-scene.fog = new THREE.FogExp2(0x87979b, 0.018);
-const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.06, 70);
+scene.background = new THREE.Color(0xaebdbd);
+scene.fog = new THREE.FogExp2(0xcbd5d4, 0.00145);
+const camera = new THREE.PerspectiveCamera(74, window.innerWidth / window.innerHeight, 0.08, 1200);
 camera.rotation.order = 'YXZ';
 scene.add(camera);
 
@@ -53,7 +54,7 @@ const COLLISION_GROUP_RAGDOLL = 8;
 const COLLISION_MASK_ALL = COLLISION_GROUP_WORLD | COLLISION_GROUP_PLAYER | COLLISION_GROUP_PROPS | COLLISION_GROUP_RAGDOLL;
 world.addContactMaterial(new CANNON.ContactMaterial(floorPhysicsMaterial, objectPhysicsMaterial, { friction: 0.75, restitution: 0.06, contactEquationStiffness: 1e7, contactEquationRelaxation: 3 }));
 world.addContactMaterial(new CANNON.ContactMaterial(objectPhysicsMaterial, objectPhysicsMaterial, { friction: 0.55, restitution: 0.09 }));
-world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, floorPhysicsMaterial, { friction: 0.0, restitution: 0.0 }));
+world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, floorPhysicsMaterial, { friction: 0.56, restitution: 0.0 }));
 world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, objectPhysicsMaterial, { friction: 0.18, restitution: 0.0 }));
 world.addContactMaterial(new CANNON.ContactMaterial(playerPhysicsMaterial, dummyPhysicsMaterial, { friction: 0.35, restitution: 0.02 }));
 
@@ -143,6 +144,105 @@ function makeSnowTexture(base, seed, repeatX, repeatY) {
   return texture;
 }
 
+function makeRoadTexture(seed) {
+  const width = 512, height = 256;
+  const roadCanvas = document.createElement('canvas');
+  roadCanvas.width = width;
+  roadCanvas.height = height;
+  const ctx = roadCanvas.getContext('2d', { willReadFrequently: true });
+  const random = seededRandom(seed);
+  const pixels = ctx.createImageData(width, height);
+  for (let y = 0; y < height; y++) {
+    const across = y / height;
+    const track = Math.min(Math.abs(across - 0.3), Math.abs(across - 0.7));
+    const rut = track < 0.075 ? -30 * (1 - track / 0.075) : 0;
+    for (let x = 0; x < width; x++) {
+      const grain = (random() - 0.5) * 30 + rut;
+      const i = (y * width + x) * 4;
+      pixels.data[i] = Math.max(0, Math.min(255, 122 + grain));
+      pixels.data[i + 1] = Math.max(0, Math.min(255, 105 + grain * 0.9));
+      pixels.data[i + 2] = Math.max(0, Math.min(255, 82 + grain * 0.72));
+      pixels.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+  for (let i = 0; i < 700; i++) {
+    ctx.fillStyle = random() > 0.55 ? 'rgba(239,242,235,.34)' : 'rgba(49,44,37,.22)';
+    const x = random() * width, y = random() * height;
+    ctx.fillRect(x, y, 1 + random() * 4, 1 + random() * 2);
+  }
+  for (const y of [75, 179]) {
+    ctx.strokeStyle = 'rgba(54,48,40,.34)';
+    ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.bezierCurveTo(150, y - 7, 340, y + 7, width, y); ctx.stroke();
+  }
+  const texture = new THREE.CanvasTexture(roadCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  return texture;
+}
+
+function makeWindowTexture() {
+  const windowCanvas = document.createElement('canvas');
+  windowCanvas.width = 128;
+  windowCanvas.height = 96;
+  const ctx = windowCanvas.getContext('2d');
+  ctx.fillStyle = '#352d25';
+  ctx.fillRect(0, 0, 128, 96);
+  ctx.fillStyle = '#8aa9aa';
+  ctx.fillRect(9, 8, 110, 80);
+  ctx.fillStyle = 'rgba(232,243,239,.35)';
+  ctx.fillRect(14, 12, 46, 70);
+  ctx.fillStyle = '#4b4032';
+  ctx.fillRect(61, 8, 6, 80);
+  ctx.fillRect(9, 45, 110, 6);
+  const texture = new THREE.CanvasTexture(windowCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function makeBrickTexture(seed) {
+  const brickCanvas = document.createElement('canvas');
+  brickCanvas.width = 512;
+  brickCanvas.height = 256;
+  const ctx = brickCanvas.getContext('2d');
+  ctx.fillStyle = '#c0b3a0';
+  ctx.fillRect(0, 0, brickCanvas.width, brickCanvas.height);
+  const random = seededRandom(seed);
+  const brickW = 64, brickH = 26, mortar = 5;
+  for (let row = 0; row < 10; row++) {
+    const offset = row % 2 ? -brickW / 2 : 0;
+    for (let column = -1; column < 10; column++) {
+      const shade = Math.floor(105 + random() * 42);
+      ctx.fillStyle = `rgb(${shade},${Math.max(0, shade - 25)},${Math.max(0, shade - 38)})`;
+      const x = offset + column * brickW + mortar / 2;
+      const y = row * brickH + mortar / 2;
+      ctx.fillRect(x, y, brickW - mortar, brickH - mortar);
+      ctx.fillStyle = 'rgba(255,235,213,.15)';
+      ctx.fillRect(x + 3, y + 3, brickW - mortar - 6, 2);
+    }
+  }
+  const texture = new THREE.CanvasTexture(brickCanvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+  return texture;
+}
+
+function makeFogTexture() {
+  const fogCanvas = document.createElement('canvas');
+  fogCanvas.width = fogCanvas.height = 128;
+  const ctx = fogCanvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+  gradient.addColorStop(0, 'rgba(227,235,234,.55)');
+  gradient.addColorStop(0.45, 'rgba(227,235,234,.28)');
+  gradient.addColorStop(1, 'rgba(227,235,234,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(fogCanvas);
+}
+
 function makeWoodTexture(base, seed) {
   const width = 512, height = 256;
   const woodCanvas = document.createElement('canvas');
@@ -215,20 +315,65 @@ const warningMaterial = new THREE.MeshStandardMaterial({ color: 0xd5aa55, roughn
 const whiteMarkMaterial = new THREE.MeshStandardMaterial({ color: 0xc1ccc5, roughness: 0.9, emissive: 0x18201c, emissiveIntensity: 0.15 });
 const barnBeamMaterial = new THREE.MeshStandardMaterial({ color: 0x4b3828, roughness: 0.9 });
 const snowMaterial = new THREE.MeshStandardMaterial({ color: 0xf4f7f7, roughness: 0.96, metalness: 0, bumpMap: floorBumpTexture, bumpScale: 0.018 });
+const terrainTexture = makeSnowTexture('#e2e7df', 512, 1, 1);
+terrainTexture.repeat.set(28, 42);
+const terrainBumpTexture = terrainTexture.clone(); terrainBumpTexture.colorSpace = THREE.NoColorSpace;
+const terrainMaterial = new THREE.MeshStandardMaterial({ map: terrainTexture, bumpMap: terrainBumpTexture, bumpScale: 0.028, color: 0xffffff, vertexColors: true, roughness: 0.98 });
+const roadTexture = makeRoadTexture(2048);
+roadTexture.repeat.set(1, 1);
+const roadMaterial = new THREE.MeshStandardMaterial({ map: roadTexture, color: 0xe1d8c7, roughness: 0.98, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 });
+const roadEdgeMaterial = new THREE.MeshStandardMaterial({ color: 0x998873, roughness: 1, side: THREE.DoubleSide });
+const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x78855d, roughness: 1, side: THREE.DoubleSide });
+const deadGrassMaterial = new THREE.MeshStandardMaterial({ color: 0x9b895f, roughness: 1, side: THREE.DoubleSide });
+const dirtMaterial = new THREE.MeshStandardMaterial({ color: 0x70604a, roughness: 1 });
+const waterMaterial = new THREE.MeshStandardMaterial({ color: 0x2b7187, roughness: 0.24, metalness: 0.08, transparent: true, opacity: 0.92 });
+const stoneMaterial = new THREE.MeshStandardMaterial({ color: 0x8f928d, roughness: 0.96 });
+const fogTexture = makeFogTexture();
+fogTexture.colorSpace = THREE.SRGBColorSpace;
 
-scene.add(new THREE.HemisphereLight(0xbdd1d0, 0x282523, 1.1));
-scene.add(new THREE.AmbientLight(0x7d9291, 0.48));
-const keyLight = new THREE.DirectionalLight(0xffe7c7, 2.15);
-keyLight.position.set(-3.8, 8.5, 4.5);
+scene.add(new THREE.HemisphereLight(0xe7f2f3, 0x555445, 1.55));
+scene.add(new THREE.AmbientLight(0xc3d0cf, 0.55));
+const keyLight = new THREE.DirectionalLight(0xfff0d8, 2.3);
+keyLight.position.set(-280, 420, 180);
 keyLight.castShadow = true;
 keyLight.shadow.mapSize.set(1536, 1536);
-keyLight.shadow.camera.left = -11; keyLight.shadow.camera.right = 11;
-keyLight.shadow.camera.top = 9; keyLight.shadow.camera.bottom = -9;
-keyLight.shadow.camera.near = 0.5; keyLight.shadow.camera.far = 25;
+keyLight.shadow.camera.left = -360; keyLight.shadow.camera.right = 360;
+keyLight.shadow.camera.top = 470; keyLight.shadow.camera.bottom = -470;
+keyLight.shadow.camera.near = 5; keyLight.shadow.camera.far = 1200;
 keyLight.shadow.bias = -0.00018;
-keyLight.shadow.normalBias = 0.025;
-keyLight.shadow.radius = 4;
+keyLight.shadow.normalBias = 0.03;
+keyLight.shadow.radius = 5;
 scene.add(keyLight);
+
+const blizzardCount = 1320;
+const blizzardGeometry = new THREE.BufferGeometry();
+const blizzardPositions = new Float32Array(blizzardCount * 3);
+const blizzardVelocities = new Float32Array(blizzardCount * 2);
+const blizzardRandom = seededRandom(240126);
+for (let i = 0; i < blizzardCount; i++) {
+  blizzardPositions[i * 3] = (blizzardRandom() - 0.5) * 72;
+  blizzardPositions[i * 3 + 1] = (blizzardRandom() - 0.5) * 44;
+  blizzardPositions[i * 3 + 2] = -2.5 - blizzardRandom() * 48;
+  blizzardVelocities[i * 2] = -3.8 - blizzardRandom() * 6.6;
+  blizzardVelocities[i * 2 + 1] = 5.0 + blizzardRandom() * 8.5;
+}
+blizzardGeometry.setAttribute('position', new THREE.BufferAttribute(blizzardPositions, 3));
+const blizzardMaterial = new THREE.PointsMaterial({ color: 0xf4f8f7, size: 0.12, transparent: true, opacity: 0.74, depthWrite: false, sizeAttenuation: true });
+const blizzard = new THREE.Points(blizzardGeometry, blizzardMaterial);
+blizzard.frustumCulled = false;
+blizzard.renderOrder = 5;
+camera.add(blizzard);
+function updateBlizzard(dt) {
+  const position = blizzardGeometry.attributes.position.array;
+  for (let i = 0; i < blizzardCount; i++) {
+    const ix = i * 3;
+    position[ix] += blizzardVelocities[i * 2] * dt;
+    position[ix + 1] -= blizzardVelocities[i * 2 + 1] * dt;
+    if (position[ix] < -38) position[ix] = 38;
+    if (position[ix + 1] < -24) position[ix + 1] = 24;
+  }
+  blizzardGeometry.attributes.position.needsUpdate = true;
+}
 
 function addPointLamp(x, z, tint = 0xc2ebe0, castSoftShadow = false) {
   const casing = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.1, 0.25), trimMaterial);
@@ -286,49 +431,62 @@ function addStaticCollider(position, halfExtents, material = floorPhysicsMateria
   return body;
 }
 
-function addRoom() {
-  const floor = addStaticBoxMesh(new THREE.BoxGeometry(18, 0.5, 14), concreteFloor, [0, -0.25, 0], { bulletSurface: true });
-  floorSurfaceMesh = floor;
-  floor.userData.groundSurface = true;
-  floor.receiveShadow = true;
-  addStaticCollider([0, -0.25, 0], [9, 0.25, 7]);
-
-  addStaticBoxMesh(new THREE.BoxGeometry(18.4, 0.42, 14.4), concreteCeiling, [0, 6.08, 0], { bulletSurface: true });
-  addStaticCollider([0, 6.08, 0], [9.2, 0.21, 7.2]);
-  for (const side of [-1, 1]) {
-    addStaticBoxMesh(new THREE.BoxGeometry(0.4, 6, 14), concreteWall, [side * 9, 3, 0], { bulletSurface: true });
-    addStaticCollider([side * 9, 3, 0], [0.2, 3, 7]);
-    addStaticBoxMesh(new THREE.BoxGeometry(18, 6, 0.4), concreteWall, [0, 3, side * 7], { castShadow: false, bulletSurface: true });
-    addStaticCollider([0, 3, side * 7], [9, 3, 0.2]);
+function addVillageTerrain() {
+  const nx = 124;
+  const nz = 144;
+  const minX = VILLAGE_BOUNDS.minX, maxX = VILLAGE_BOUNDS.maxX;
+  const minZ = VILLAGE_BOUNDS.minZ, maxZ = VILLAGE_BOUNDS.maxZ;
+  const positions = [];
+  const colors = [];
+  const uvs = [];
+  const indices = [];
+  const lowColor = new THREE.Color('#c6d0c4');
+  const middleColor = new THREE.Color('#d0d1c8');
+  const highColor = new THREE.Color('#c8c9bf');
+  for (let iz = 0; iz <= nz; iz++) {
+    const z = minZ + (maxZ - minZ) * iz / nz;
+    for (let ix = 0; ix <= nx; ix++) {
+      const x = minX + (maxX - minX) * ix / nx;
+      const height = terrainHeightAt(x);
+      positions.push(x, height - 0.012, z);
+      let color;
+      if (x <= -100) color = lowColor;
+      else if (x >= 100) color = highColor;
+      else color = lowColor.clone().lerp(middleColor, (x + 100) / 200);
+      colors.push(color.r, color.g, color.b);
+      uvs.push((x - minX) / (maxX - minX), (z - minZ) / (maxZ - minZ));
+      if (ix < nx && iz < nz) {
+        const a = iz * (nx + 1) + ix;
+        const b = a + 1;
+        const c = a + nx + 1;
+        const d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
   }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const terrain = new THREE.Mesh(geometry, terrainMaterial);
+  terrain.receiveShadow = true;
+  terrain.userData.groundSurface = true;
+  floorSurfaceMesh = terrain;
+  scene.add(terrain);
 
-  // Dark timber posts and rails frame the shed walls without covering their plank texture.
-  for (const side of [-1, 1]) {
-    for (const z of [-6.65, -3.3, 0, 3.3, 6.65]) {
-      addStaticBoxMesh(new THREE.BoxGeometry(0.24, 6.05, 0.25), barnBeamMaterial, [side * 8.76, 3, z]);
-    }
-    for (const y of [0.18, 1.86, 3.54, 5.82]) {
-      addStaticBoxMesh(new THREE.BoxGeometry(0.2, 0.17, 13.7), barnBeamMaterial, [side * 8.76, y, 0]);
-    }
-  }
-  for (const side of [-1, 1]) {
-    for (const x of [-8.65, 0, 8.65]) {
-      addStaticBoxMesh(new THREE.BoxGeometry(0.25, 6.05, 0.24), barnBeamMaterial, [x, 3, side * 6.76]);
-    }
-    for (const y of [0.18, 1.86, 3.54, 5.82]) {
-      addStaticBoxMesh(new THREE.BoxGeometry(17.35, 0.17, 0.2), barnBeamMaterial, [0, y, side * 6.76]);
-    }
-  }
-
-  const wallSign = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 1.16), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('СНЕЖНЫЙ ДВОР', 'ПОЛИГОН ВЫЖИВАНИЯ', '#c8dfd8'), roughness: 0.84, metalness: 0.04, emissive: 0x18201d, emissiveIntensity: 0.18 }));
-  wallSign.position.set(0, 4.4, -6.785);
-  scene.add(wallSign);
-  const dataPlate = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 0.52), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('ЗИМНИЙ САРАЙ', 'OFFLINE / 01', '#d9b46d'), roughness: 0.84, emissive: 0x17140e, emissiveIntensity: 0.2 }));
-  dataPlate.position.set(8.785, 3.9, -1.4);
-  dataPlate.rotation.y = -Math.PI / 2;
-  scene.add(dataPlate);
+  // Three overlapping static physics slabs provide a continuous, walkable 2% eastbound grade.
+  addStaticCollider([-205.25, -0.42, 0], [106.25, 0.42, 450]);
+  const ramp = new CANNON.Body({ mass: 0, material: floorPhysicsMaterial, collisionFilterGroup: COLLISION_GROUP_WORLD, collisionFilterMask: COLLISION_MASK_ALL });
+  ramp.addShape(new CANNON.Box(new CANNON.Vec3(100.5, 0.5, 450)));
+  ramp.position.set(0, 1.5, 0);
+  ramp.quaternion.setFromEuler(0, 0, Math.atan(0.02), 'XYZ');
+  world.addBody(ramp);
+  addStaticCollider([205.25, 3.58, 0], [106.25, 0.42, 450]);
+  world.broadphase.dirty = true;
 }
-addRoom();
+addVillageTerrain();
 
 const woodMaps = [
   makeWoodTexture('#846744', 213),
@@ -345,6 +503,24 @@ const woodMaterials = [
   new THREE.MeshStandardMaterial({ map: woodMaps[1], bumpMap: woodBumpMaps[1], bumpScale: 0.035, color: 0x6f573d, roughness: 0.91 }),
   new THREE.MeshStandardMaterial({ map: woodMaps[2], bumpMap: woodBumpMaps[2], bumpScale: 0.035, color: 0x9a784f, roughness: 0.83 })
 ];
+const brickTexture = makeBrickTexture(483);
+brickTexture.repeat.set(2.6, 1.45);
+const brickBumpTexture = brickTexture.clone(); brickBumpTexture.colorSpace = THREE.NoColorSpace;
+const brickMaterial = new THREE.MeshStandardMaterial({ map: brickTexture, bumpMap: brickBumpTexture, bumpScale: 0.035, color: 0xf1e3d2, roughness: 0.94 });
+const villageRoofMaterials = [
+  new THREE.MeshStandardMaterial({ color: 0x38423f, roughness: 0.82, metalness: 0.16 }),
+  new THREE.MeshStandardMaterial({ color: 0x66513d, roughness: 0.94, metalness: 0.02 }),
+  new THREE.MeshStandardMaterial({ color: 0x573c31, roughness: 0.88, metalness: 0.04 }),
+  new THREE.MeshStandardMaterial({ color: 0x59646a, roughness: 0.48, metalness: 0.38 })
+];
+const fenceWoodMaterial = new THREE.MeshStandardMaterial({ color: 0x665039, roughness: 0.93 });
+const doorPanelMaterial = new THREE.MeshStandardMaterial({ color: 0x493a2d, roughness: 0.9 });
+const windowMaterial = new THREE.MeshStandardMaterial({ map: makeWindowTexture(), roughness: 0.54, metalness: 0.05, side: THREE.DoubleSide });
+const paintedMetalMaterial = new THREE.MeshStandardMaterial({ color: 0x56615d, roughness: 0.7, metalness: 0.42 });
+const rustMaterial = new THREE.MeshStandardMaterial({ color: 0x754734, roughness: 0.86, metalness: 0.18 });
+const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x465c4a, roughness: 0.96 });
+const pineSnowMaterial = new THREE.MeshStandardMaterial({ color: 0xcbd6d2, roughness: 0.94 });
+const treeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x594532, roughness: 0.96 });
 const crateTrim = new THREE.MeshStandardMaterial({ color: 0x302b24, roughness: 0.75, metalness: 0.15 });
 const bottleMaterials = [
   new THREE.MeshStandardMaterial({ color: 0x70aaa1, roughness: 0.23, metalness: 0.05 }),
@@ -370,13 +546,45 @@ function tagVisual(root, meta) {
   raycastTargets.push(root);
 }
 
+function updateSnowDriftCollider(drift, scale) {
+  if (drift.body) {
+    world.removeBody(drift.body);
+    drift.body = null;
+  }
+  const wakeRadius = Math.max(1.5, 0.9 * scale);
+  for (const body of world.bodies) {
+    if (body.mass <= 0) continue;
+    const dx = body.position.x - drift.x;
+    const dz = body.position.z - drift.z;
+    if (dx * dx + dz * dz <= wakeRadius * wakeRadius && body.position.y < drift.baseY + 2.2) body.wakeUp();
+  }
+  if (drift.meta.isEmpty) {
+    world.broadphase.dirty = true;
+    return;
+  }
+  const radius = 0.48 * scale;
+  const body = new CANNON.Body({
+    mass: 0,
+    material: floorPhysicsMaterial,
+    collisionFilterGroup: COLLISION_GROUP_WORLD,
+    collisionFilterMask: COLLISION_MASK_ALL
+  });
+  body.addShape(new CANNON.Sphere(radius));
+  body.position.set(drift.x, drift.baseY + radius, drift.z);
+  body.gameMeta = { kind: 'snowdrift', name: 'СУГРОБ', drift };
+  world.addBody(body);
+  drift.body = body;
+  world.broadphase.dirty = true;
+}
+
 function updateSnowDriftVisual(drift) {
   const amount = Math.max(0, drift.amount);
   const scale = Math.cbrt(amount);
   drift.meta.isEmpty = amount <= 0.012;
   drift.group.visible = !drift.meta.isEmpty;
   drift.group.scale.setScalar(scale);
-  drift.group.position.y = 0.02 + 0.07 * scale;
+  drift.group.position.y = drift.baseY + 0.02 + 0.07 * scale;
+  updateSnowDriftCollider(drift, scale);
 }
 
 function createSnowDrift(x, z, amount = 1) {
@@ -395,9 +603,10 @@ function createSnowDrift(x, z, amount = 1) {
     lobe.scale.set(sx, sy, sz);
     group.add(lobe);
   }
-  group.position.set(x, 0, z);
+  group.position.set(x, terrainHeightAt(x), z);
+  scene.add(group);
   const meta = { kind: 'snowdrift', name: 'СУГРОБ', range: 4.5, isEmpty: false };
-  const drift = { group, amount: Math.max(0, amount), meta };
+  const drift = { group, amount: Math.max(0, amount), meta, x, z, baseY: terrainHeightAt(x), body: null };
   meta.drift = drift;
   tagVisual(group, meta);
   snowDrifts.push(drift);
@@ -623,36 +832,546 @@ function addFirewood(name, position, yaw = 0) {
   }, new CANNON.Box(new CANNON.Vec3(0.34, 0.09, 0.09)), mass, position, visual, yaw, { angularDamping: 0.28 });
 }
 
-// Fixed masses, starting positions and footprints keep every prop clear of the floor and one another.
-addCrate('ЯЩИК A-01', [-3.55, 0.42, -1.0], [0.86, 0.84, 0.78], 7.5, 0x756044, -0.08);
-addCrate('ЯЩИК A-02', [-2.73, 0.38, -1.27], [0.72, 0.76, 0.68], 5.2, 0x8b6d48, 0.14);
-addCrate('ЯЩИК A-03', [-3.1, 1.23, -1.12], [0.68, 0.76, 0.64], 5.8, 0x69563f, 0.06);
-addCrate('ЯЩИК B-01', [4.95, 0.48, 0.1], [0.95, 0.96, 0.86], 11.0, 0x715a41, 0.24);
-addCrate('ЯЩИК B-02', [5.8, 0.38, -0.25], [0.72, 0.76, 0.72], 5.4, 0x8b6d48, -0.17);
-addBarrel('БОЧКА M-01', [2.75, 0.54, -1.9], 0.38, 1.08, 18, 0);
-addBarrel('БОЧКА M-02', [3.75, 0.5, -2.75], 0.35, 1.0, 15, 1, 0.18);
-addBarrel('БОЧКА M-03', [1.93, 0.47, -3.25], 0.33, 0.94, 14, 0, -0.12);
-addBottle('ФЛАКОН G-01', [-0.62, 0.22, -2.35], 0);
-addBottle('ФЛАКОН G-02', [0.05, 0.22, -2.55], 1, 0.5);
-addBottle('ФЛАКОН G-03', [0.62, 0.22, -2.38], 2, -0.3);
-addBottle('ФЛАКОН G-04', [-4.72, 0.22, 1.0], 1, 0.4);
-addBottle('ФЛАКОН G-05', [4.2, 0.22, 1.6], 0, -0.6);
-addPlank('ДОСКА P-01', [-1.45, 0.085, -4.1], 2.35, 0.36, 0.15, 3.4, 0.06);
-addPlank('ДОСКА P-02', [-0.2, 0.09, -4.35], 2.0, 0.32, 0.16, 3.1, -0.33);
-addPlank('ДОСКА P-03', [0.85, 0.075, 1.05], 2.7, 0.4, 0.13, 4.2, 0.52);
-addPlank('ДОСКА P-04', [6.15, 0.08, 2.2], 2.15, 0.3, 0.14, 3.0, -0.13);
-addShovel('ЛОПАТА S-01', [-5.55, 0.07, 2.7], -0.25);
-addFirewood('ДРОВА F-01', [6.15, 0.1, -4.1], 0.18);
-addFirewood('ДРОВА F-02', [6.78, 0.1, -4.22], -0.36);
-addFirewood('ДРОВА F-03', [5.82, 0.1, -4.52], 0.46);
-addFirewood('ДРОВА F-04', [6.22, 0.1, -3.72], -0.2);
+// Village content is built from the attached village plan; coordinates are metres in the same world as physics.
+const stovePosition = new THREE.Vector3(-18, terrainHeightAt(-18), 108);
+const fencePostInstances = [];
+const fencePicketInstances = [];
+const fenceRailInstances = [];
+const treeTrunkInstances = [];
+const pineLayerInstances = [[], [], []];
+const pineSnowInstances = [[], []];
+const villageBoxBatches = new Map();
+const villageWindowInstances = [];
 
-createSnowDrift(-5.05, 1.55, 1);
-createSnowDrift(0.15, 2.7, 0.92);
-createSnowDrift(-6.35, -3.85, 1);
-createSnowDrift(5.6, 3.75, 0.88);
+function pushInstance(target, position, quaternion, scale) {
+  target.push({ position: position.clone(), quaternion: quaternion.clone(), scale: scale.clone() });
+}
 
-const stovePosition = new THREE.Vector3(7.15, 0, -5.35);
+function addInstanceBatch(geometry, material, entries, castShadow = true) {
+  if (!entries.length) return null;
+  const mesh = new THREE.InstancedMesh(geometry, material, entries.length);
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = true;
+  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  const matrix = new THREE.Matrix4();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    matrix.compose(entry.position, entry.quaternion, entry.scale);
+    mesh.setMatrixAt(i, matrix);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.computeBoundingSphere();
+  scene.add(mesh);
+  return mesh;
+}
+
+function addFenceArea(centerX, centerZ, width, depth, gateSide = 'south', openingWidth = 2.8) {
+  const halfW = width / 2, halfD = depth / 2;
+  const sides = [
+    { name: 'north', a: [-halfW, -halfD], b: [halfW, -halfD], axis: 'x' },
+    { name: 'south', a: [-halfW, halfD], b: [halfW, halfD], axis: 'x' },
+    { name: 'west', a: [-halfW, -halfD], b: [-halfW, halfD], axis: 'z' },
+    { name: 'east', a: [halfW, -halfD], b: [halfW, halfD], axis: 'z' }
+  ];
+  const body = new CANNON.Body({ mass: 0, material: floorPhysicsMaterial, collisionFilterGroup: COLLISION_GROUP_WORLD, collisionFilterMask: COLLISION_MASK_ALL });
+  for (const side of sides) {
+    const ax = centerX + side.a[0], az = centerZ + side.a[1];
+    const bx = centerX + side.b[0], bz = centerZ + side.b[1];
+    const dx = bx - ax, dz = bz - az;
+    const length = Math.hypot(dx, dz);
+    const hasGate = side.name === gateSide;
+    const gateStart = hasGate ? (length - openingWidth) / 2 : length;
+    const gateEnd = hasGate ? (length + openingWidth) / 2 : length;
+    const spans = hasGate ? [[0, gateStart], [gateEnd, length]] : [[0, length]];
+    const pointAt = (distance) => {
+      const t = distance / length;
+      return { x: ax + dx * t, z: az + dz * t };
+    };
+    for (const [from, to] of spans) {
+      if (to - from < 0.3) continue;
+      const start = pointAt(from), end = pointAt(to);
+      const midpoint = pointAt((from + to) / 2);
+      const baseY = terrainHeightAt(midpoint.x);
+      const segmentLength = to - from;
+      const direction = new THREE.Vector3(end.x - start.x, terrainHeightAt(end.x) - terrainHeightAt(start.x), end.z - start.z).normalize();
+      const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), direction);
+      for (const offset of [0.28, 0.68, 1.08]) {
+        const startPos = new THREE.Vector3(start.x, terrainHeightAt(start.x) + offset, start.z);
+        const endPos = new THREE.Vector3(end.x, terrainHeightAt(end.x) + offset, end.z);
+        const middle = startPos.clone().add(endPos).multiplyScalar(0.5);
+        const railScale = new THREE.Vector3(segmentLength, 1, 1);
+        pushInstance(fenceRailInstances, middle, rotation, railScale);
+      }
+      const firstPost = pointAt(from);
+      const lastPost = pointAt(to);
+      const postDistances = [from, to];
+      for (let d = from + 4.0; d < to - 0.25; d += 4.0) postDistances.push(d);
+      for (const d of postDistances) {
+        const p = pointAt(d);
+        const ground = terrainHeightAt(p.x);
+        pushInstance(fencePostInstances, new THREE.Vector3(p.x, ground + 0.67, p.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+      }
+      for (let d = from + 1.8; d < to - 0.7; d += 1.8) {
+        const p = pointAt(d);
+        const ground = terrainHeightAt(p.x);
+        pushInstance(fencePicketInstances, new THREE.Vector3(p.x, ground + 0.53, p.z), new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+      }
+      const half = side.axis === 'x'
+        ? new CANNON.Vec3(segmentLength / 2, 0.62, 0.085)
+        : new CANNON.Vec3(0.085, 0.62, segmentLength / 2);
+      const shape = new CANNON.Box(half);
+      const offset = new CANNON.Vec3(midpoint.x, baseY + 0.62, midpoint.z);
+      const shapeRotation = new CANNON.Quaternion();
+      if (side.axis === 'x') shapeRotation.setFromEuler(0, 0, Math.atan(0.02), 'XYZ');
+      body.addShape(shape, offset, shapeRotation);
+    }
+  }
+  if (body.shapes.length) world.addBody(body);
+}
+
+function finishFenceInstances() {
+  addInstanceBatch(new THREE.BoxGeometry(0.16, 1.34, 0.16), fenceWoodMaterial, fencePostInstances);
+  addInstanceBatch(new THREE.BoxGeometry(0.075, 1.0, 0.12), fenceWoodMaterial, fencePicketInstances);
+  addInstanceBatch(new THREE.BoxGeometry(1, 0.13, 0.12), fenceWoodMaterial, fenceRailInstances);
+}
+
+function addBuildingPart(dimensions, position, material, bulletSurface = false, rotation = [0, 0, 0]) {
+  let batch = villageBoxBatches.get(material);
+  if (!batch) {
+    batch = [];
+    villageBoxBatches.set(material, batch);
+  }
+  const instance = {
+    position: new THREE.Vector3(position[0], position[1], position[2]),
+    scale: new THREE.Vector3(dimensions[0], dimensions[1], dimensions[2]),
+    rotation: [...rotation],
+    bulletSurface
+  };
+  batch.push(instance);
+  return { userData: {}, instance };
+}
+
+function addVillageWindow(x, y, z, width = 1.12, height = 0.86) {
+  villageWindowInstances.push({ position: new THREE.Vector3(x, y, z), scale: new THREE.Vector3(width, height, 1), quaternion: new THREE.Quaternion() });
+}
+
+function finishVillageBoxes() {
+  const unitBox = new THREE.BoxGeometry(1, 1, 1);
+  for (const [material, entries] of villageBoxBatches) {
+    const mesh = new THREE.InstancedMesh(unitBox, material, entries.length);
+    const matrix = new THREE.Matrix4();
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(...entry.rotation));
+      matrix.compose(entry.position, quaternion, entry.scale);
+      mesh.setMatrixAt(i, matrix);
+    }
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    scene.add(mesh);
+    if (entries.some((entry) => entry.bulletSurface)) {
+      mesh.userData.bulletSurface = true;
+      bulletSurfaceTargets.push(mesh);
+    }
+  }
+  if (villageWindowInstances.length) {
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), windowMaterial, villageWindowInstances.length);
+    const matrix = new THREE.Matrix4();
+    for (let i = 0; i < villageWindowInstances.length; i++) {
+      const entry = villageWindowInstances[i];
+      matrix.compose(entry.position, entry.quaternion, entry.scale);
+      mesh.setMatrixAt(i, matrix);
+    }
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+    scene.add(mesh);
+  }
+}
+
+function createGableRoofGeometry(width, depth, rise) {
+  const w = width / 2, d = depth / 2;
+  const positions = [
+    -w, 0, -d, 0, rise, -d, w, 0, -d,
+    -w, 0, d, 0, rise, d, w, 0, d
+  ];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex([0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4, 0, 2, 1, 3, 4, 5]);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createGambrelRoofGeometry(width, depth, rise) {
+  const w = width / 2, d = depth / 2;
+  const cross = [[-w, 0], [-w * 0.32, rise * 0.42], [0, rise], [w * 0.32, rise * 0.42], [w, 0]];
+  const positions = [];
+  for (const [x, y] of cross) positions.push(x, y, -d);
+  for (const [x, y] of cross) positions.push(x, y, d);
+  const indices = [];
+  for (let i = 0; i < 4; i++) indices.push(i, i + 1, 6 + i, i, 6 + i, 5 + i);
+  indices.push(0, 4, 2, 5, 7, 9);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function createHipRoofGeometry(width, depth, rise) {
+  const w = width / 2, d = depth / 2;
+  const positions = [-w, 0, -d, w, 0, -d, w, 0, d, -w, 0, d, 0, rise, 0];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex([0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4]);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function addVillageBuilding({ x, z, width, depth, height, label, subtitle = 'ДЕРЕВНЯ / ПОЛИГОН 01', wallMaterial, roofType = 0, roofMaterial = villageRoofMaterials[0], brick = false, windows = 2, chimney = true, accent = '#c5d7d0' }) {
+  const ground = terrainHeightAt(x);
+  const foundationHeight = 0.28;
+  addBuildingPart([width + 0.45, foundationHeight, depth + 0.45], [x, ground + foundationHeight / 2, z], stoneMaterial);
+  const wallY = ground + foundationHeight + height / 2;
+  const walls = addBuildingPart([width, height, depth], [x, wallY, z], wallMaterial, true);
+  walls.userData.structure = label;
+  addStaticCollider([x, wallY, z], [width / 2, height / 2, depth / 2]);
+  const frontZ = z + depth / 2 + 0.065;
+  const doorWidth = Math.min(1.15, width * 0.16);
+  addBuildingPart([doorWidth + 0.18, 2.05, 0.13], [x, ground + foundationHeight + 1.03, frontZ], fenceWoodMaterial);
+  addBuildingPart([doorWidth, 1.85, 0.055], [x, ground + foundationHeight + 0.96, frontZ + 0.08], doorPanelMaterial);
+  for (let i = 0; i < windows; i++) {
+    const wx = x + (i - (windows - 1) / 2) * Math.min(3.2, width / (windows + 0.5));
+    const wy = ground + foundationHeight + height * 0.59;
+    addVillageWindow(wx, wy, frontZ + 0.105);
+  }
+  const roofY = ground + foundationHeight + height;
+  let roofGeometry;
+  if (roofType === 1) roofGeometry = createHipRoofGeometry(width + 0.55, depth + 0.55, Math.min(width, depth) * 0.34);
+  else if (roofType === 2) roofGeometry = createGambrelRoofGeometry(width + 0.5, depth + 0.5, width * 0.31);
+  else if (roofType === 3) {
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(width + 0.7, 0.22, depth + 0.7), roofMaterial);
+    roof.position.set(x, roofY + 0.42, z);
+    roof.rotation.z = width > 9 ? -0.18 : 0.13;
+    roof.castShadow = true; roof.receiveShadow = true;
+    scene.add(roof);
+    roofGeometry = null;
+  } else roofGeometry = createGableRoofGeometry(width + 0.55, depth + 0.55, width * 0.29);
+  if (roofGeometry) {
+    const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+    roof.position.set(x, roofY, z);
+    roof.castShadow = true; roof.receiveShadow = true;
+    roof.userData.structure = `${label} / КРЫША`;
+    scene.add(roof);
+  }
+  if (chimney && width < 24) {
+    addBuildingPart([0.42, 1.05, 0.42], [x + width * 0.29, roofY + 0.5, z - depth * 0.15], rustMaterial);
+    addBuildingPart([0.56, 0.11, 0.56], [x + width * 0.29, roofY + 1.07, z - depth * 0.15], paintedMetalMaterial);
+  }
+  const signWidth = Math.min(width * 0.7, Math.max(2.3, label.length * 0.32));
+  const signY = ground + foundationHeight + Math.min(height - 0.45, height * 0.82);
+  addBuildingPart([signWidth, 0.55, 0.1], [x, signY, frontZ + 0.095], fenceWoodMaterial);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(signWidth - 0.12, 0.44), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(label, subtitle, accent), roughness: 0.83, emissive: 0x161916, emissiveIntensity: 0.12 }));
+  sign.position.set(x, signY, frontZ + 0.153);
+  scene.add(sign);
+}
+
+function addWarehouse(hangar) {
+  const { x, z, width, depth, height } = hangar;
+  const ground = terrainHeightAt(x);
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x727b76, roughness: 0.76, metalness: 0.34 });
+  addBuildingPart([width + 0.8, 0.35, depth + 0.8], [x, ground + 0.175, z], stoneMaterial);
+  const wallY = ground + 0.35 + height / 2;
+  addBuildingPart([width, height, depth], [x, wallY, z], wallMat, true);
+  addStaticCollider([x, wallY, z], [width / 2, height / 2, depth / 2]);
+  const doorWidth = Math.min(13, width * 0.24);
+  const doorHeight = height * 0.72;
+  addBuildingPart([doorWidth, doorHeight, 0.16], [x, ground + 0.35 + doorHeight / 2, z + depth / 2 + 0.09], paintedMetalMaterial);
+  const roof = new THREE.Mesh(createGableRoofGeometry(width + 1.0, depth + 0.8, Math.min(width * 0.09, 3.2)), villageRoofMaterials[3]);
+  roof.position.set(x, ground + 0.35 + height, z);
+  roof.castShadow = true; roof.receiveShadow = true;
+  scene.add(roof);
+  const panelCount = Math.min(10, Math.max(3, Math.floor(width / 8)));
+  for (let i = 0; i <= panelCount; i++) {
+    const beamX = x - width / 2 + width * i / panelCount;
+    addBuildingPart([0.07, height - 0.25, 0.08], [beamX, ground + 0.35 + height / 2, z + depth / 2 + 0.1], trimMaterial);
+  }
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(14, width * 0.45), 1.05), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('МИХТОК', 'АНГАР · СКЛАД', '#d6c29a'), roughness: 0.8 }));
+  sign.position.set(x, ground + 0.35 + height * 0.78, z + depth / 2 + 0.145);
+  scene.add(sign);
+}
+
+function addRoadRibbon(points, width, material, edge = false) {
+  const halfWidth = width / 2;
+  const verts = [], uvs = [], indices = [];
+  let distance = 0;
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(points.length - 1, i + 1)];
+    const dx = next[0] - prev[0], dz = next[1] - prev[1];
+    const length = Math.hypot(dx, dz) || 1;
+    const nx = -dz / length, nz = dx / length;
+    if (i > 0) distance += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+    for (const side of [-1, 1]) {
+      const x = points[i][0] + nx * halfWidth * side;
+      const z = points[i][1] + nz * halfWidth * side;
+      verts.push(x, terrainHeightAt(x) + (edge ? 0.016 : 0.034), z);
+      uvs.push(distance / 9, side < 0 ? 0 : 1);
+    }
+    if (i < points.length - 1) {
+      const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const road = new THREE.Mesh(geometry, material);
+  road.receiveShadow = true;
+  scene.add(road);
+  return road;
+}
+
+function addGrassPatch(centerX, centerZ, width, depth, count, material = grassMaterial, seed = 1) {
+  const random = seededRandom(seed);
+  const positions = [];
+  for (let i = 0; i < count; i++) {
+    const x = centerX + (random() - 0.5) * width;
+    const z = centerZ + (random() - 0.5) * depth;
+    const ground = terrainHeightAt(x) + 0.015;
+    const height = 0.62 + random() * 0.78;
+    const bladeWidth = 0.035 + random() * 0.055;
+    const angle = random() * Math.PI;
+    const dx = Math.cos(angle) * bladeWidth;
+    const dz = Math.sin(angle) * bladeWidth;
+    const bendX = (random() - 0.5) * 0.12;
+    const bendZ = (random() - 0.5) * 0.12;
+    positions.push(x - dx, ground, z - dz, x + dx, ground, z + dz, x + bendX, ground + height, z + bendZ);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.frustumCulled = true;
+  mesh.castShadow = false;
+  scene.add(mesh);
+}
+
+function addFogBank(x, z, size, y = 0.7) {
+  const material = new THREE.MeshBasicMaterial({ map: fogTexture, color: 0xdce4e2, transparent: true, opacity: 0.42, depthWrite: false, side: THREE.DoubleSide });
+  const bank = new THREE.Mesh(new THREE.PlaneGeometry(size, size * 0.72), material);
+  bank.rotation.x = -Math.PI / 2;
+  bank.position.set(x, terrainHeightAt(x) + y, z);
+  bank.renderOrder = 2;
+  scene.add(bank);
+}
+
+function addPond() {
+  const pond = VILLAGE_LAYOUT.pond;
+  const ground = terrainHeightAt(pond.x);
+  const water = new THREE.Mesh(new THREE.CircleGeometry(1, 80), waterMaterial);
+  water.scale.set(pond.radiusX, pond.radiusZ, 1);
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(pond.x, ground + 0.04, pond.z);
+  water.receiveShadow = true;
+  scene.add(water);
+  const bank = new THREE.Mesh(new THREE.TorusGeometry(1, 0.045, 7, 80), snowMaterial);
+  bank.scale.set(pond.radiusX + 1.3, pond.radiusZ + 1.3, 1);
+  bank.rotation.x = Math.PI / 2;
+  bank.position.set(pond.x, ground + 0.055, pond.z);
+  scene.add(bank);
+  for (const offset of [-0.25, 0.3]) {
+    const ripple = new THREE.Mesh(new THREE.TorusGeometry(1, 0.012, 4, 72), new THREE.MeshBasicMaterial({ color: 0xbcd1d0, transparent: true, opacity: 0.38 }));
+    ripple.scale.set(pond.radiusX * (0.58 + offset), pond.radiusZ * (0.58 + offset), 1);
+    ripple.rotation.x = Math.PI / 2;
+    ripple.position.set(pond.x, ground + 0.052, pond.z);
+    scene.add(ripple);
+  }
+  const signX = pond.x + pond.radiusX + 5;
+  const signZ = pond.z + pond.radiusZ * 0.45;
+  addBuildingPart([0.16, 2.0, 0.16], [signX, ground + 1, signZ], fenceWoodMaterial);
+  const plaque = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 1.2), new THREE.MeshStandardMaterial({ map: makeCanvasLabel(pond.label, 'ЗАПАДНАЯ НИЗИНА · 0 М', '#b5d8d8'), roughness: 0.82 }));
+  plaque.position.set(signX, ground + 1.76, signZ + 0.11);
+  scene.add(plaque);
+  for (let i = 0; i < 5; i++) {
+    const angle = i * 1.21;
+    const x = pond.x + Math.cos(angle) * (pond.radiusX + 2 + i % 2);
+    const z = pond.z + Math.sin(angle) * (pond.radiusZ + 2);
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 + (i % 3) * 0.12, 0), stoneMaterial);
+    stone.position.set(x, ground + 0.15, z);
+    stone.scale.set(1.2, 0.48, 0.9);
+    stone.castShadow = true; scene.add(stone);
+  }
+  addFogBank(pond.x - 10, pond.z + 4, 80, 0.7);
+  addFogBank(pond.x + 15, pond.z - 9, 72, 0.95);
+  addFogBank(pond.x + 2, pond.z + 22, 65, 0.72);
+}
+
+function addConifer(x, z, scale = 1) {
+  const ground = terrainHeightAt(x);
+  pushInstance(treeTrunkInstances, new THREE.Vector3(x, ground + 1.05 * scale, z), new THREE.Quaternion(), new THREE.Vector3(scale, scale, scale));
+  for (let i = 0; i < 3; i++) {
+    const h = (2.1 - i * 0.42) * scale;
+    const radius = (1.05 - i * 0.15) * scale;
+    pushInstance(pineLayerInstances[i], new THREE.Vector3(x, ground + (1.45 + i * 0.82) * scale, z), new THREE.Quaternion(), new THREE.Vector3(radius, h, radius));
+    if (i < 2) {
+      const snowRadius = (0.79 - i * 0.12) * scale;
+      const snowRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -0.08));
+      pushInstance(pineSnowInstances[i], new THREE.Vector3(x + 0.06 * scale, ground + (1.49 + i * 0.82) * scale, z + 0.04 * scale), snowRotation, new THREE.Vector3(snowRadius, h * 0.82, snowRadius));
+    }
+  }
+  addStaticCollider([x, ground + 1.0 * scale, z], [0.19 * scale, 1.0 * scale, 0.19 * scale]);
+}
+
+function finishConiferInstances() {
+  addInstanceBatch(new THREE.CylinderGeometry(0.13, 0.23, 2.1, 7), treeTrunkMaterial, treeTrunkInstances);
+  const foliageGeometry = new THREE.ConeGeometry(1, 1, 7);
+  for (const entries of pineLayerInstances) addInstanceBatch(foliageGeometry, pineMaterial, entries);
+  for (const entries of pineSnowInstances) addInstanceBatch(foliageGeometry, pineSnowMaterial, entries);
+}
+
+function addBusStop() {
+  const stop = VILLAGE_LAYOUT.stop;
+  const ground = terrainHeightAt(stop.x);
+  const supportMat = new THREE.MeshStandardMaterial({ color: 0x5b4937, roughness: 0.9 });
+  addBuildingPart([6.4, 0.22, 4.2], [stop.x, ground + 0.11, stop.z], stoneMaterial);
+  for (const dx of [-2.8, 2.8]) for (const dz of [-1.65, 1.65]) {
+    addBuildingPart([0.16, 2.6, 0.16], [stop.x + dx, ground + 1.3, stop.z + dz], supportMat);
+    addStaticCollider([stop.x + dx, ground + 1.3, stop.z + dz], [0.08, 1.3, 0.08]);
+  }
+  addBuildingPart([6.6, 0.22, 4.3], [stop.x, ground + 2.66, stop.z], villageRoofMaterials[3], false, [0, 0, -0.015]);
+  addBuildingPart([4.5, 0.12, 0.54], [stop.x, ground + 0.72, stop.z + 1.1], fenceWoodMaterial);
+  addBuildingPart([4.5, 0.12, 0.14], [stop.x, ground + 1.12, stop.z + 1.27], fenceWoodMaterial);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.1), new THREE.MeshStandardMaterial({ map: makeCanvasLabel('ОСТАНОВКА', 'ВОСТОЧНЫЙ ТРАКТ · +4 М', '#d8c392'), roughness: 0.83 }));
+  sign.position.set(stop.x, ground + 1.82, stop.z + 1.74);
+  scene.add(sign);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.6, 8), paintedMetalMaterial);
+  post.position.set(stop.x + 4.2, ground + 1.8, stop.z - 2.4);
+  scene.add(post);
+  const signPlate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.12), new THREE.MeshStandardMaterial({ color: 0x526c68, roughness: 0.64, metalness: 0.22 }));
+  signPlate.position.set(stop.x + 4.2, ground + 3.9, stop.z - 2.4);
+  scene.add(signPlate);
+}
+
+function buildVillageWorld() {
+  addPond();
+  for (const road of VILLAGE_LAYOUT.roads) {
+    addRoadRibbon(road.points, road.width + 0.9, roadEdgeMaterial, true);
+    addRoadRibbon(road.points, road.width, roadMaterial, false);
+  }
+  addGrassPatch(-274, -342, 35, 88, 340, deadGrassMaterial, 67);
+  addGrassPatch(-283, -216, 34, 72, 320, grassMaterial, 119);
+  addGrassPatch(-280, -45, 35, 82, 360, deadGrassMaterial, 283);
+  addGrassPatch(-265, 114, 34, 76, 300, grassMaterial, 617);
+  addGrassPatch(-204, -325, 28, 58, 230, grassMaterial, 342);
+  addGrassPatch(-205, 172, 26, 40, 180, deadGrassMaterial, 721);
+  const treeLocations = [
+    [-298, -414, 1.15], [-285, -390, 0.9], [-304, -300, 1.0], [-292, -232, 1.22],
+    [-300, -178, 0.88], [-292, -110, 1.12], [-300, -38, 0.95], [-290, 38, 1.16],
+    [-302, 124, 1.0], [-286, 186, 1.18], [-300, 262, 0.92], [-286, 336, 1.08],
+    [-300, 407, 1.24], [294, -405, 1.0], [301, -315, 1.15], [293, -248, 0.92],
+    [299, -174, 1.05], [292, -102, 0.88], [300, -28, 1.12], [292, 44, 1.0],
+    [300, 238, 1.15], [294, 316, 0.96], [301, 404, 1.18]
+  ];
+  for (const [x, z, scale] of treeLocations) addConifer(x, z, scale);
+  finishConiferInstances();
+
+  for (const lot of VILLAGE_LAYOUT.lots) {
+    addFenceArea(lot.x, lot.z, lot.width, lot.depth, lot.gate);
+    let x = lot.x, z = lot.z;
+    if (lot.gate === 'east') x -= 6;
+    else if (lot.gate === 'west') x += 6;
+    else if (lot.gate === 'north') z += 5;
+    else z -= 5;
+    const wallMaterial = lot.id.startsWith('S-') || Number(lot.id.split('-')[1]) % 3 === 0
+      ? brickMaterial
+      : woodMaterials[Number(lot.id.split('-')[1]) % woodMaterials.length];
+    addVillageBuilding({
+      x, z, width: lot.houseWidth, depth: lot.houseDepth, height: lot.id.startsWith('S-') ? 3.1 : 2.85,
+      label: lot.id, subtitle: 'ЖИЛОЙ УЧАСТОК', wallMaterial,
+      roofType: lot.roof, roofMaterial: villageRoofMaterials[(lot.roof + Number(lot.id.split('-')[1])) % villageRoofMaterials.length],
+      brick: wallMaterial === brickMaterial, windows: lot.houseWidth > 11 ? 2 : 1, chimney: true
+    });
+  }
+  const school = VILLAGE_LAYOUT.school;
+  addFenceArea(school.x, school.z, school.width + 12, school.depth + 14, 'east', 3.2);
+  addVillageBuilding({ x: school.x, z: school.z, width: school.width, depth: school.depth, height: 4.8, label: 'ШКОЛА', subtitle: 'СЕЛЬСКАЯ ШКОЛА', wallMaterial: brickMaterial, roofType: 1, roofMaterial: villageRoofMaterials[2], windows: 7, chimney: true, accent: '#d8c8a4' });
+  const shop = VILLAGE_LAYOUT.shop;
+  addFenceArea(shop.x, shop.z, 24, 19, 'north', 3.2);
+  addVillageBuilding({ x: shop.x, z: shop.z, width: shop.width, depth: shop.depth, height: 3.45, label: 'МАГАЗИН', subtitle: 'ПРОДУКТЫ · 08:00–20:00', wallMaterial: woodMaterials[2], roofType: 0, roofMaterial: villageRoofMaterials[1], windows: 2, accent: '#e3d19e' });
+  for (let i = 0; i < VILLAGE_LAYOUT.garages.length; i++) {
+    const garage = VILLAGE_LAYOUT.garages[i];
+    addVillageBuilding({ x: garage.x, z: garage.z, width: garage.width, depth: garage.depth, height: 2.8, label: `ГАРАЖ ${i + 1}`, subtitle: 'ЧАСТНЫЙ СЕКТОР', wallMaterial: woodMaterials[i % woodMaterials.length], roofType: i % 4, roofMaterial: villageRoofMaterials[i % villageRoofMaterials.length], windows: 0, chimney: false });
+  }
+  addBusStop();
+  for (const hangar of VILLAGE_LAYOUT.hangars) {
+    addFenceArea(hangar.x, hangar.z, hangar.width + 9, hangar.depth + 10, 'south', 5.0);
+    addWarehouse(hangar);
+  }
+  for (const yard of VILLAGE_LAYOUT.scrapYards) {
+    addFenceArea(yard.x, yard.z, yard.width, yard.depth, yard.gate, 5.5);
+    const base = terrainHeightAt(yard.x);
+    const piles = [
+      [-yard.width * 0.29, -yard.depth * 0.18, 2.4, 1.0, 1.6],
+      [yard.width * 0.26, -yard.depth * 0.22, 1.8, 1.25, 1.0],
+      [-yard.width * 0.1, yard.depth * 0.26, 3.1, 0.75, 1.25],
+      [yard.width * 0.26, yard.depth * 0.2, 1.7, 0.8, 1.8]
+    ];
+    for (let i = 0; i < piles.length; i++) {
+      const [dx, dz, w, h, d] = piles[i];
+      const scrap = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), i % 2 ? rustMaterial : paintedMetalMaterial);
+      scrap.position.set(yard.x + dx, base + h / 2 + 0.08, yard.z + dz);
+      scrap.rotation.y = (i - 1) * 0.23;
+      scrap.rotation.z = (i % 2 ? 0.08 : -0.06);
+      scrap.castShadow = true; scrap.receiveShadow = true; scene.add(scrap);
+      addStaticCollider([yard.x + dx, base + h / 2 + 0.08, yard.z + dz], [w / 2, h / 2, d / 2]);
+    }
+    for (let i = 0; i < 3; i++) {
+      const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.72 + i * 0.04, 0.19, 8, 18), trimMaterial);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(yard.x - yard.width * 0.12 + i * 1.9, base + 0.19, yard.z + yard.depth * 0.02);
+      wheel.castShadow = true; scene.add(wheel);
+    }
+  }
+  finishFenceInstances();
+  for (const drift of VILLAGE_LAYOUT.snowDrifts) createSnowDrift(drift.x, drift.z, drift.amount);
+  addSnowDrift(-248, -390, 0.86);
+  addSnowDrift(255, 178, 0.9);
+  addSnowDrift(126, 91, 0.82);
+  addSnowDrift(-149, 304, 0.82);
+
+  // Interactable survival supplies are deliberately scattered through the village; the starting bag stays empty.
+  const firewoodY = terrainHeightAt(stovePosition.x) + 0.105;
+  addFirewood('ДРОВА F-01', [-15.4, firewoodY, 108.7], 0.18);
+  addFirewood('ДРОВА F-02', [-14.6, firewoodY, 108.5], -0.36);
+  addFirewood('ДРОВА F-03', [-15.7, firewoodY, 109.4], 0.46);
+  addFirewood('ДРОВА F-04', [-14.9, firewoodY + 0.17, 109.1], -0.2);
+  addShovel('ЛОПАТА S-01', [-36.5, terrainHeightAt(-36.5) + 0.08, 117], -0.25);
+  addCrate('ЯЩИК M-01', [230, baseHeightAt(230) + 0.42, -336], [0.86, 0.84, 0.78], 7.5, 0x756044, -0.08);
+  addCrate('ЯЩИК M-02', [251, baseHeightAt(251) + 0.38, -351], [0.72, 0.76, 0.68], 5.2, 0x8b6d48, 0.14);
+  addBarrel('БОЧКА M-01', [241, baseHeightAt(241) + 0.54, -354], 0.38, 1.08, 18, 0);
+  addPlank('ДОСКА P-01', [235, baseHeightAt(235) + 0.09, -326], 2.35, 0.36, 0.15, 3.4, 0.06);
+  addCrate('ЯЩИК M-03', [248, baseHeightAt(248) + 0.48, -159], [0.95, 0.96, 0.86], 11.0, 0x715a41, 0.24);
+  addBarrel('БОЧКА M-02', [260, baseHeightAt(260) + 0.5, -138], 0.35, 1.0, 15, 1, 0.18);
+  addBottle('ФЛАКОН G-01', [240, baseHeightAt(240) + 0.22, -142], 0);
+  addBottle('ФЛАКОН G-02', [242, baseHeightAt(242) + 0.22, -142.3], 1, 0.5);
+  addCrate('ЯЩИК M-04', [181, baseHeightAt(181) + 0.44, -81], [0.72, 0.76, 0.72], 5.4, 0x8b6d48, -0.17);
+  addBarrel('БОЧКА M-03', [194, baseHeightAt(194) + 0.47, -90], 0.33, 0.94, 14, 0, -0.12);
+  addPlank('ДОСКА P-02', [186, baseHeightAt(186) + 0.085, -70], 2.0, 0.32, 0.16, 3.1, -0.33);
+  addBottle('ФЛАКОН G-03', [47, baseHeightAt(47) + 0.22, 166], 2, -0.3);
+  addBottle('ФЛАКОН G-04', [49, baseHeightAt(49) + 0.22, 166.3], 1, 0.4);
+  finishVillageBoxes();
+}
+
+function baseHeightAt(x) { return terrainHeightAt(x); }
+buildVillageWorld();
 const fireParticles = [];
 let fireRoot = null;
 let stoveGroup = null;
@@ -720,11 +1439,11 @@ function buildStove() {
   const stoveMeta = { kind: 'stove', name: 'КИРПИЧНАЯ ПЕЧЬ', range: 4.7 };
   tagVisual(stoveGroupRoot, stoveMeta);
   stoveGroup = stoveGroupRoot;
-  addStaticCollider([stovePosition.x, 0.5, stovePosition.z], [0.66, 0.5, 0.55]);
-  addStaticCollider([stovePosition.x + 0.32, 1.78, stovePosition.z - 0.24], [0.21, 0.81, 0.22]);
+  addStaticCollider([stovePosition.x, stovePosition.y + 0.5, stovePosition.z], [0.66, 0.5, 0.55]);
+  addStaticCollider([stovePosition.x + 0.32, stovePosition.y + 1.78, stovePosition.z - 0.24], [0.21, 0.81, 0.22]);
 
   fireRoot = new THREE.Group();
-  fireRoot.position.set(stovePosition.x, 0, stovePosition.z + 0.66);
+  fireRoot.position.set(stovePosition.x, stovePosition.y, stovePosition.z + 0.66);
   fireRoot.visible = false;
   scene.add(fireRoot);
   const flameColors = [0xff5722, 0xff8b27, 0xffc34e, 0xffe08a];
@@ -736,7 +1455,7 @@ function buildStove() {
     fireParticles.push({ mesh: particle, phase: Math.random() * Math.PI * 2, rate: 1.35 + Math.random() * 1.45, spread: 0.03 + Math.random() * 0.11 });
   }
   stoveLight = new THREE.PointLight(0xff8738, 0, 5.3, 2);
-  stoveLight.position.set(stovePosition.x, 0.92, stovePosition.z + 0.92);
+  stoveLight.position.set(stovePosition.x, stovePosition.y + 0.92, stovePosition.z + 0.92);
   scene.add(stoveLight);
 }
 buildStove();
@@ -843,7 +1562,8 @@ function buildMannequin(id, origin, colorIndex) {
     punchSide: 1, walkPhase: 0, wanderTarget: null, navDirection: null
   };
   const ox = origin[0], oz = origin[2];
-  const position = (x, y, z) => [ox + x, y, oz + z];
+  const groundY = terrainHeightAt(ox);
+  const position = (x, y, z) => [ox + x, groundY + y, oz + z];
   addRagdollPart(human, 'pelvis', [0.39, 0.28, 0.25], 5.2, position(0, 0.97, 0), dummyJointMaterial);
   addRagdollPart(human, 'torso', [0.44, 0.58, 0.28], 9.4, position(0, 1.39, 0));
   addRagdollPart(human, 'head', [0.32, 0.32, 0.32], 3.1, position(0, 1.84, 0));
@@ -873,7 +1593,7 @@ function buildMannequin(id, origin, colorIndex) {
   for (const part of human.parts) {
     part.restLocal = {
       x: part.body.position.x - ox,
-      y: part.body.position.y,
+      y: part.body.position.y - groundY,
       z: part.body.position.z - oz
     };
     part.restQuaternion = part.body.quaternion.clone();
@@ -898,8 +1618,8 @@ function buildMannequin(id, origin, colorIndex) {
   return human;
 }
 
-buildMannequin('D-01', [-3.6, 0, -4.55], 0);
-buildMannequin('D-02', [3.7, 0, -4.5], 1);
+buildMannequin('D-01', [-135, 0, 212], 0);
+buildMannequin('D-02', [143, 0, -142], 1);
 
 const MANNEQUIN_KNEELING_POSE = {
   pelvis: [0, 0.84, 0, 0.08, 0, 0],
@@ -989,7 +1709,7 @@ function makeMannequinWorldPose(human, entries) {
     pose[part.key] = {
       position: new CANNON.Vec3(
         human.rootX + entry[0] * cosine + entry[2] * sine,
-        entry[1],
+        terrainHeightAt(human.rootX) + entry[1],
         human.rootZ - entry[0] * sine + entry[2] * cosine
       ),
       quaternion: worldQuaternion
@@ -1076,10 +1796,10 @@ function blendMannequinPose(human, from, to, progress, dt) {
 
 function beginMannequinRecovery(human) {
   const pelvis = human.partMap.pelvis.body.position;
-  human.rootX = THREE.MathUtils.clamp(pelvis.x, -8.0, 8.0);
-  human.rootZ = THREE.MathUtils.clamp(pelvis.z, -6.0, 6.0);
+  human.rootX = THREE.MathUtils.clamp(pelvis.x, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+  human.rootZ = THREE.MathUtils.clamp(pelvis.z, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
   const targetX = human.behavior === 'peaceful'
-    ? THREE.MathUtils.clamp(human.rootX + (human.rootX < 0 ? -2.6 : 2.6), -7.4, 7.4)
+    ? THREE.MathUtils.clamp(human.rootX + (human.rootX < 0 ? -2.6 : 2.6), VILLAGE_BOUNDS.minX + 3, VILLAGE_BOUNDS.maxX - 3)
     : playerBody.position.x;
   const targetZ = human.behavior === 'peaceful' ? human.rootZ + 0.05 : playerBody.position.z;
   human.yaw = Math.atan2(targetX - human.rootX, targetZ - human.rootZ);
@@ -1098,8 +1818,8 @@ function finishMannequinRecovery(human) {
   if (human.behavior === 'peaceful') {
     const side = human.rootX < 0 ? -1 : 1;
     human.wanderTarget = {
-      x: THREE.MathUtils.clamp(human.rootX + side * 2.6, -7.4, 7.4),
-      z: THREE.MathUtils.clamp(human.rootZ + 0.12, -5.9, 5.9)
+      x: THREE.MathUtils.clamp(human.rootX + side * 2.6, VILLAGE_BOUNDS.minX + 3, VILLAGE_BOUNDS.maxX - 3),
+      z: THREE.MathUtils.clamp(human.rootZ + 0.12, VILLAGE_BOUNDS.minZ + 3, VILLAGE_BOUNDS.maxZ - 3)
     };
     human.state = 'walking-away';
   } else {
@@ -1159,8 +1879,8 @@ function moveMannequinToward(human, targetX, targetZ, speed, dt) {
   const direction = getMannequinSteering(human, dx, dz);
   faceMannequinToward(human, direction.x, direction.z, dt);
   const travel = Math.min(distance, speed * dt);
-  human.rootX = THREE.MathUtils.clamp(human.rootX + direction.x * travel, -8.0, 8.0);
-  human.rootZ = THREE.MathUtils.clamp(human.rootZ + direction.z * travel, -6.0, 6.0);
+  human.rootX = THREE.MathUtils.clamp(human.rootX + direction.x * travel, VILLAGE_BOUNDS.minX + 2, VILLAGE_BOUNDS.maxX - 2);
+  human.rootZ = THREE.MathUtils.clamp(human.rootZ + direction.z * travel, VILLAGE_BOUNDS.minZ + 2, VILLAGE_BOUNDS.maxZ - 2);
   human.walkPhase += dt * (speed + 1.8);
   return distance;
 }
@@ -1268,7 +1988,7 @@ function updateMannequinAI(dt) {
   }
 }
 
-const playerStart = new CANNON.Vec3(0, 0.87, 5.25);
+const playerStart = new CANNON.Vec3(VILLAGE_LAYOUT.stop.x, terrainHeightAt(VILLAGE_LAYOUT.stop.x) + 0.87, VILLAGE_LAYOUT.stop.z + 4);
 const playerBody = new CANNON.Body({
   mass: 72,
   material: playerPhysicsMaterial,
@@ -2048,7 +2768,8 @@ function updateWeapon(dt) {
     fireHeld = false;
     muzzleFlash.visible = false;
     weaponModel.visible = false;
-    weaponView.visible = !dead && Boolean(heldBody);
+    weaponView.visible = false;
+    handGroup.visible = false;
     return;
   }
   if (fireHeld && fireCooldown <= 0 && reloadTimer <= 0) fireWeapon();
@@ -2108,7 +2829,7 @@ function updateWeapon(dt) {
   if (pumpGroup && reloadTimer > 0) pumpGroup.position.z = pumpBasePosition.z + reloadMotion * 0.08;
   if (snowPayload) snowPayload.visible = carriedSnow > 0 && !heldBody;
   weaponModel.visible = !heldBody;
-  weaponView.visible = !dead && Boolean(weapon || heldBody);
+  weaponView.visible = !dead && Boolean(weapon);
 }
 
 // Separate low-poly operator preview for the inventory screen. The model is original and uses block-based geometry.
@@ -2171,8 +2892,8 @@ let inventoryRendererFailed = false;
 let inventoryPreviewTime = 0;
 let inventoryPreviewAccumulator = 0;
 
-let yaw = 0;
-let pitch = 0;
+let yaw = Math.PI / 2;
+let pitch = -0.08;
 let started = true;
 let heldBody = null;
 let currentTarget = null;
@@ -3064,7 +3785,7 @@ function updateCamera(dt) {
     handGroup.visible = false;
     return;
   }
-  handGroup.visible = Boolean(currentWeaponId || heldBody);
+  handGroup.visible = Boolean(currentWeaponId) && !dead;
   const moving = isMovementKeyDown();
   const bob = moving ? Math.sin(walkPhase * 2.0) * 0.026 : 0;
   const sway = moving ? Math.sin(walkPhase) * 0.012 : 0;
@@ -3078,13 +3799,14 @@ function updateCamera(dt) {
 
 function resetPlayerFallTracking() {
   playerFallArmed = false;
-  playerFallPeakY = playerStart.y;
+  playerFallPeakY = playerBody.position.y;
   playerMaxFallSpeed = 0;
 }
 
 function resolvePlayerFallDamage() {
   if (!playerFallArmed) return;
-  const drop = playerFallPeakY - playerStart.y;
+  const landingFloor = terrainHeightAt(playerBody.position.x) + 0.87;
+  const drop = playerFallPeakY - landingFloor;
   const impactSpeed = playerMaxFallSpeed;
   resetPlayerFallTracking();
   if (drop < 2.4 || impactSpeed < 5.2) return;
@@ -3096,7 +3818,8 @@ function updatePlayerFallDamage() {
   if (dead || menuOpen || inventoryOpen) return;
   const y = playerBody.position.y;
   const verticalSpeed = playerBody.velocity.y;
-  if (verticalSpeed < -1.2 && y > playerStart.y + 0.4) {
+  const localFloor = terrainHeightAt(playerBody.position.x);
+  if (verticalSpeed < -1.2 && y > localFloor + 1.25) {
     playerFallArmed = true;
     playerFallPeakY = Math.max(playerFallPeakY, y);
     playerMaxFallSpeed = Math.max(playerMaxFallSpeed, -verticalSpeed);
@@ -3107,9 +3830,12 @@ function updatePlayerFallDamage() {
 
 function keepPlayerInBounds() {
   if (dead) return;
-  const safeX = 8.45;
-  const safeZ = 6.45;
-  if (![playerBody.position.x, playerBody.position.y, playerBody.position.z].every(Number.isFinite) || playerBody.position.y < 0.48) {
+  const safeMinX = VILLAGE_BOUNDS.minX + 0.5;
+  const safeMaxX = VILLAGE_BOUNDS.maxX - 0.5;
+  const safeMinZ = VILLAGE_BOUNDS.minZ + 0.5;
+  const safeMaxZ = VILLAGE_BOUNDS.maxZ - 0.5;
+  const localFloor = terrainHeightAt(playerBody.position.x);
+  if (![playerBody.position.x, playerBody.position.y, playerBody.position.z].every(Number.isFinite) || playerBody.position.y < localFloor + 0.48) {
     resolvePlayerFallDamage();
     playerBody.position.copy(playerStart);
     playerBody.previousPosition.copy(playerStart);
@@ -3123,16 +3849,17 @@ function keepPlayerInBounds() {
     toast('ВОЗВРАТ В СЕКТОР · ПАДЕНИЕ', 1.4);
     return;
   }
-  if (playerBody.position.x < -safeX || playerBody.position.x > safeX) {
-    playerBody.position.x = THREE.MathUtils.clamp(playerBody.position.x, -safeX, safeX);
-    if (Math.sign(playerBody.velocity.x) === Math.sign(playerBody.position.x)) playerBody.velocity.x = 0;
+  if (playerBody.position.x < safeMinX || playerBody.position.x > safeMaxX) {
+    playerBody.position.x = THREE.MathUtils.clamp(playerBody.position.x, safeMinX, safeMaxX);
+    if (Math.sign(playerBody.velocity.x) === Math.sign(playerBody.position.x - (safeMinX + safeMaxX) / 2)) playerBody.velocity.x = 0;
   }
-  if (playerBody.position.z < -safeZ || playerBody.position.z > safeZ) {
-    playerBody.position.z = THREE.MathUtils.clamp(playerBody.position.z, -safeZ, safeZ);
+  if (playerBody.position.z < safeMinZ || playerBody.position.z > safeMaxZ) {
+    playerBody.position.z = THREE.MathUtils.clamp(playerBody.position.z, safeMinZ, safeMaxZ);
     if (Math.sign(playerBody.velocity.z) === Math.sign(playerBody.position.z)) playerBody.velocity.z = 0;
   }
-  if (playerBody.position.y > 5.02) {
-    playerBody.position.y = 5.02;
+  const ceiling = terrainHeightAt(playerBody.position.x) + 5.02;
+  if (playerBody.position.y > ceiling) {
+    playerBody.position.y = ceiling;
     if (playerBody.velocity.y > 0) playerBody.velocity.y = 0;
   }
   playerBody.aabbNeedsUpdate = true;
@@ -3168,6 +3895,7 @@ function animate(time) {
   const dt = Math.min(0.05, Math.max(0.001, (time - (animate.lastTime || time)) / 1000));
   animate.lastTime = time;
   elapsed += dt;
+  updateBlizzard(dt);
   if (dead) deathTimer += dt;
   frameCount++;
   fpsTime += dt;

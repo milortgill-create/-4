@@ -17,7 +17,8 @@ const fallSandbox = {
   playerMaxFallSpeed: 0,
   playerPreviousVerticalVelocity: 0,
   playerStart: { y: 0.87 },
-  playerBody: { position: { y: 0.87 }, velocity: { y: 0 } },
+  playerBody: { position: { x: 0, y: 0.87 }, velocity: { y: 0 } },
+  terrainHeightAt: () => 0,
   dead: false,
   menuOpen: false,
   inventoryOpen: false,
@@ -49,6 +50,8 @@ const damageEvents = [];
 const sandbox = {
   CANNON: C,
   THREE,
+  VILLAGE_BOUNDS: { minX: -310, maxX: 310, minZ: -450, maxZ: 450 },
+  terrainHeightAt: () => 0,
   physicsRecords: [],
   mannequins: [],
   playerBody: { position: new C.Vec3(0, 0.87, 5.25) },

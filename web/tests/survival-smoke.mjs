@@ -35,9 +35,13 @@ assert.equal(updateHeat(2, 10, false), 0, 'the warmth meter should not go below 
 const mainSource = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../../app/src/main/assets/index.html', import.meta.url), 'utf8');
 const css = await readFile(new URL('../../app/src/main/assets/style.css', import.meta.url), 'utf8');
-assert.match(mainSource, /makeSnowTexture\('#e2e9e9'/, 'the courtyard floor should use a snow texture');
-assert.match(mainSource, /makeWoodTexture\('#775a3d'/, 'the test room walls should use a shed wood texture');
+assert.match(mainSource, /makeSnowTexture\('#e2e9e9'/, 'the village terrain should use a detailed snow texture');
+assert.match(mainSource, /makeWoodTexture\('#775a3d'/, 'wood materials should retain visible grain');
 assert.match(mainSource, /function createSnowDrift\(/, 'the scene should create interactable snow drifts');
+assert.match(mainSource, /function updateSnowDriftCollider\(/, 'snowdrifts should have an updatable physical collider');
+assert.match(mainSource, /new CANNON\.Sphere\(radius\)/, 'the snowdrift collider should block the player and props');
+assert.match(mainSource, /scene\.add\(group\);[\s\S]*tagVisual\(group, meta\)/, 'snowdrift visuals must be attached to the scene and raycastable');
+assert.match(mainSource, /world\.removeBody\(drift\.body\)/, 'digging must remove or resize the snowdrift collider');
 assert.match(mainSource, /function finishSnowAction\(/, 'shovel actions should complete an animated scoop or dump');
 assert.match(mainSource, /function buildStove\(/, 'the scene should include a brick stove');
 assert.match(mainSource, /function feedStoveWithHeldWood\(/, 'held firewood should fuel the stove through the action control');

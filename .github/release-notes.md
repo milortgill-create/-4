@@ -1,10 +1,10 @@
-# POLYGON 01 — v1.6.0 «Снежный двор»
+# POLYGON 01 — v1.7.0 «Карпятник»
 
-The offline Android survival test scene now starts with an empty backpack and no equipped item, with first-person hands hidden until the player picks up or equips something.
+Offline Android survival update: the former small test yard is now a walkable winter village built from the supplied map.
 
-- Replaced the concrete chamber floor and walls with textured snow and a timber shed courtyard; added snowdrifts, worn boards, crates and barrels.
-- Added an equipable low-poly shovel to the test catalog. Scooping reduces a drift, puts visible snow on the shovel, and slows the player; dumping it on the ground creates a new drift.
-- Added nearby firewood and a brick stove. Use a held log next to the stove to light or fuel it; animated flames, procedural crackling and a proximity-based warmth meter are included.
-- Preserved the offline Android touch HUD, existing weapon catalog, safe prop contact and health rules.
+- Added the western 0 m basin and the labelled Karpyatnik pond, tall grass, snowbanks and low mist; the central residential streets now contain varied wooden and brick houses, the school, shop and garages.
+- Added a smooth, physical 2% grade from the west basin through the +2 m village to the +4 m eastern plateau, textured muddy/snowy roads with tire ruts, fenced lots with walk-through gates, the bus stop, Mikhtok hangars and fenced scrap yards.
+- Moved the empty-handed spawn to the eastern bus stop, facing downhill into a dense animated blizzard. First-person hands and weapon view are hidden when no weapon is equipped.
+- Snowbanks are visible, collidable and shrink when dug with the shovel. Preserved the empty backpack, offline touch controls, survival needs, shovel, snow carrying, firewood, stove, fire and warmth mechanics.
 
-This is a debug-signed APK for Android 6.0+ (API 23). The game runs without network access.
+Debug-signed APK for Android 6.0+ (API 23). Gameplay assets are bundled locally; the game requires no network connection.
